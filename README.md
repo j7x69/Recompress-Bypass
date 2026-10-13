@@ -1,4 +1,4 @@
-# MP4 Quality Bypass Optimizer 🚀
+# MP4 Quality Optimizer 🚀
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/Python-3.7%2B-brightgreen.svg)](https://python.org)
