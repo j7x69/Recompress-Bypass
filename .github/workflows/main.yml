@@ -1,44 +1,56 @@
 name: Build Android APK
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+jobs: build: runs-on: ubuntu-latest timeout-minutes: 45
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
 
-      - name: Set up Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
+  - name: Set up Java JDK
+    uses: actions/setup-java@v4
+    with:
+      distribution: "temurin"
+      java-version: "17"
 
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.24.5"
-          channel: "stable"
+  - name: Set up Flutter
+    uses: subosito/flutter-action@v2
+    with:
+      flutter-version: "3.24.5"
+      channel: "stable"
 
-      - name: Accept Android SDK Licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+  - name: Check Android SDK & Flutter
+    run: |
+      echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+      flutter --version
+      flutter doctor -v || true
+      ls -la "$ANDROID_SDK_ROOT" || true
+      ls -la "$ANDROID_SDK_ROOT/cmdline-tools" || true
 
-      - name: Install Flet
-        run: pip install "flet==0.24.1"
+  - name: Configure Android SDK and accept licenses
+    run: |
+      flutter config --android-sdk "$ANDROID_SDK_ROOT" || true
+      yes | flutter doctor --android-licenses || true
 
-      - name: Build APK
-        run: |
-          flet build apk --project "RecompressBypass" --description "MP4 400FPS Bypass" --org "com.j7x69.bypass" --verbose
+  - name: Install Flet
+    run: pip install "flet==0.24.1"
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Recompress-Bypass-APK
-          path: build/apk/*.apk
+  - name: Build APK
+    run: |
+      flet build apk \
+        --project "RecompressBypass" \
+        --description "MP4 400FPS Bypass" \
+        --org "com.j7x69.bypass" \
+        --verbose
+
+  - name: Upload APK Artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: Recompress-Bypass-APK
+      path: build/app/outputs/flutter-apk/*.apk
+      if-no-files-found: error
