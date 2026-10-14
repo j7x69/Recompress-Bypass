@@ -1,7 +1,5 @@
-- name: Build APK
-        run: |
-          rm -f requirements.txt
-          flet build apk --project "RecompressBypass" --description "MP4 400FPS Bypass" --org "com.j7x69.bypass" --verbose
+name: Build Android APK
+
 on:
   workflow_dispatch:
 
