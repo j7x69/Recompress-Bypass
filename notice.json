@@ -1,9 +1,9 @@
 {
   "active": true,
   "level": "info",
-  "title": "Đã có bản mới. NHƯNG!",
-  "message": "không có nhưng... update thôi ",
+  "title": "Đã có bản mới.",
+  "message": "Bản mới hiện tại là v1.1.0 check github hoặc auto update",
   "block_actions": false,
-  "action_text": "Xem chi tiết",
-  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.0.8"
+  "action_text": "UPDATE",
+  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.0"
 }
