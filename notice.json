@@ -3,7 +3,7 @@
   "level": "info",
   "title": "Đã có bản mới. NHƯNG!",
   "message": "v1.0.71 đã outdate và auto update bị lỗi luôn. ấn chi tiết để chuyển hướng đén release mới nhất trên Github ",
-  "block_actions": true,
+  "block_actions": false,
   "action_text": "Xem chi tiết",
   "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.0.8"
 }
