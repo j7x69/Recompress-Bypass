@@ -1,8 +1,8 @@
 {
   "active": true,
-  "level": "error",
+  "level": "warning",
   "title": "Recompress hiện tại không khả dụng!",
-  "message": "TikTok vừa cập nhật thuật toán mới. Tạm thời ngưng recompress để tránh hỏng video... app trong quá trình phát triển thì tiktok cho 1 quả sập hết!        Know issue: Tab dự án gần đây khi ấn 'phát' sẽ phát 1 dự ám nào đó khác ",
+  "message": "Đang update code tối ưu mới... Know issue: Tab dự án gần đây khi ấn 'phát' sẽ phát 1 dự ám nào đó khác ",
   "block_actions": true,
   "action_text": "Xem chi tiết",
   "action_url": "https://github.com/j7x69/Recompress-Bypass"
