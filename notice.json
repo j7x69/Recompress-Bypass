@@ -1,8 +1,8 @@
 {
   "active": true,
-  "level": "warning",
-  "title": "Recompress hiện tại không khả dụng!",
-  "message": "Đang update code tối ưu mới... Know issue: Tab dự án gần đây khi ấn 'phát' sẽ phát 1 dự ám nào đó khác ",
+  "level": "info",
+  "title": "đang update!",
+  "message": "Đang update code tối ưu mới... ",
   "block_actions": true,
   "action_text": "Xem chi tiết",
   "action_url": "https://github.com/j7x69/Recompress-Bypass"
