@@ -1,8 +1,0 @@
-# Zero external dependencies required!
-# This tool uses standard library modules only:
-# - struct
-# - os
-# - sys
-# - glob
-# - argparse
-# Compatible with Python 3.7+
