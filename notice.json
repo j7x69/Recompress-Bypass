@@ -1,5 +1,5 @@
 {
-  "active": true,
+  "active": false,
   "level": "info",
   "title": "Đã có bản mới.",
   "message": "Bản mới hiện tại là v1.1.0 check github hoặc auto update",
