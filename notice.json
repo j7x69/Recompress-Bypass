@@ -1,9 +1,15 @@
 {
   "active": true,
   "level": "info",
-  "title": "Thông báo nhỏ",
-  "message": "Delay v1.1.2 do thằng dev muốn test tính năng mới hoặc lười và bận🫩✌️",
+  "title": "Đã có bản mới.",
+  "message": "Bản mới hiện tại là v1.1.0 check github hoặc auto update",
   "block_actions": false,
-  "action_text": "v1.1.1 latest* ",
-  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.1"
+  "action_text": "UPDATE",
+  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.0",
+  "title_en": "New Update Available",
+  "message_en": "Current version v1.1.0 is released. Check GitHub or use auto-update.",
+  "action_text_en": "UPDATE NOW",
+  "title_vi": "Đã có bản mới.",
+  "message_vi": "Bản mới hiện tại là v1.1.0. Kiểm tra GitHub hoặc cập nhật tự động.",
+  "action_text_vi": "CẬP NHẬT NGAY"
 }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Mặc định chặn toàn bộ kết nối cleartext (HTTP thuần) -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Ép buộc HTTPS cho các dịch vụ chính của app -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+        <domain includeSubdomains="true">tiktok.com</domain>
+        <domain includeSubdomains="true">tiktokv.com</domain>
+        <domain includeSubdomains="true">byteoversea.com</domain>
+    </domain-config>
+</network-security-config>
