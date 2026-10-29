@@ -8,7 +8,7 @@
   - Bản Debug kiểm thử: `RecompressBypass-v<versionName>-debug.apk`
 - **Tự động hóa hoàn toàn trong Gradle (`app/build.gradle.kts`):**
   - Task `copyApksToRelease` đã được cấu hình tự động chạy sau cả `assembleRelease` và `assembleDebug`.
-  - Bất kể lệnh build nào (`gradlew assembleRelease`, `gradlew assembleDebug`, Android Studio build hay file `build_release.bat`), file APK luôn được tự động đồng bộ vào thư mục `release/`.
+  - Bất kể lệnh build nào (`gradlew assembleRelease`, `gradlew assembleDebug` hoặc Android Studio build), file APK luôn được tự động đồng bộ vào thư mục `release/`.
 - **Nguyên tắc tổ chức file:**
   - **TUYỆT ĐỐI KHÔNG** lưu hoặc để file `.apk` vương vãi tại thư mục gốc của dự án (`/`) hoặc bất kỳ thư mục tạm nào khác.
   - File `.gitignore` đã chặn toàn bộ `/*.apk` ở thư mục gốc để tránh rác repository.
@@ -20,8 +20,6 @@
   `.\gradlew.bat assembleRelease` ➔ Tự động cập nhật vào `release/RecompressBypass-v<versionName>-release.apk`
 - **Biên dịch Debug:**  
   `.\gradlew.bat assembleDebug` ➔ Tự động cập nhật vào `release/RecompressBypass-v<versionName>-debug.apk`
-- **Script nâng phiên bản & build tự động:**  
-  Chạy `build_release.bat` ➔ Nhập version mới ➔ Tự động cập nhật `build.gradle.kts` ➔ Build cả Release & Debug và xuất vào `release/`.
 
 ---
 
