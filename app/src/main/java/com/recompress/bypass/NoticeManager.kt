@@ -1,13 +1,10 @@
 package com.recompress.bypass
 
-import android.text.Html
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
 
 data class RemoteNotice(
     val active: Boolean,
@@ -27,14 +24,14 @@ data class RemoteNotice(
     fun getExplicitTitle(lang: AppLanguage): String? {
         return when (lang) {
             AppLanguage.EN -> titleEn?.ifBlank { null }
-            AppLanguage.VI -> titleVi?.ifBlank { null }
+            AppLanguage.VI -> titleVi?.ifBlank { null } ?: title.ifBlank { null }
         }
     }
 
     fun getExplicitMessage(lang: AppLanguage): String? {
         return when (lang) {
             AppLanguage.EN -> messageEn?.ifBlank { null }
-            AppLanguage.VI -> messageVi?.ifBlank { null }
+            AppLanguage.VI -> messageVi?.ifBlank { null } ?: message.ifBlank { null }
         }
     }
 
@@ -52,59 +49,21 @@ data class RemoteNotice(
     }
 }
 
+/**
+ * Điều phối hiển thị nội dung thông báo theo ngôn ngữ người dùng.
+ * Đã loại bỏ hoàn toàn việc gọi API dịch ngoài (MyMemory) để:
+ * 1. Tải thông báo tức thì (0ms latency), không làm chậm khởi động app.
+ * 2. Bảo mật tuyệt đối, không rò rỉ nội dung thông báo nội bộ.
+ * 3. Không bị giới hạn lượt gọi hay lỗi rác chuỗi dịch (MYMEMORY WARNING).
+ */
 object NoticeTranslator {
-    private val cache = ConcurrentHashMap<String, String>()
-
-    suspend fun translateText(text: String, fromLang: String, toLang: String): String = withContext(Dispatchers.IO) {
-        if (text.isBlank() || fromLang.equals(toLang, ignoreCase = true)) return@withContext text
-        val cacheKey = "$fromLang->$toLang::$text"
-        cache[cacheKey]?.let { return@withContext it }
-
-        try {
-            val encoded = URLEncoder.encode(text, "UTF-8")
-            val urlStr = "https://api.mymemory.translated.net/get?q=$encoded&langpair=$fromLang|$toLang"
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                setRequestProperty("User-Agent", "RecompressBypass-Android")
-            }
-            if (conn.responseCode == 200) {
-                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
-                val root = JSONObject(jsonStr)
-                val responseData = root.optJSONObject("responseData")
-                val translated = responseData?.optString("translatedText", "") ?: ""
-                if (translated.isNotBlank() && !translated.contains("MYMEMORY WARNING", ignoreCase = true)) {
-                    val cleaned = Html.fromHtml(translated, Html.FROM_HTML_MODE_LEGACY).toString().trim()
-                    cache[cacheKey] = cleaned
-                    return@withContext cleaned
-                }
-            }
-        } catch (_: Exception) {
-            // Fallback gracefully to original
-        }
-        return@withContext text
-    }
-
     suspend fun resolveNoticeContent(
         notice: RemoteNotice,
         targetLang: AppLanguage
-    ): Pair<String, String> {
-        val explicitTitle = notice.getExplicitTitle(targetLang)
-        val explicitMsg = notice.getExplicitMessage(targetLang)
-
-        if (explicitTitle != null && explicitMsg != null) {
-            return Pair(explicitTitle, explicitMsg)
-        }
-
-        val fromLang = if (targetLang == AppLanguage.EN) "vi" else "en"
-        val toLang = if (targetLang == AppLanguage.EN) "en" else "vi"
-
-        val resolvedTitle = explicitTitle ?: translateText(notice.title, fromLang, toLang)
-        val resolvedMsg = explicitMsg ?: if (notice.message.isNotBlank()) {
-            translateText(notice.message, fromLang, toLang)
-        } else ""
-
-        return Pair(resolvedTitle, resolvedMsg)
+    ): Pair<String, String> = withContext(Dispatchers.Default) {
+        val resolvedTitle = notice.getExplicitTitle(targetLang) ?: notice.title
+        val resolvedMsg = notice.getExplicitMessage(targetLang) ?: notice.message
+        Pair(resolvedTitle, resolvedMsg)
     }
 }
 
@@ -140,12 +99,14 @@ object NoticeManager {
             val actionText = root.optString("action_text", "").ifBlank { null }
             val actionUrl = root.optString("action_url", "").ifBlank { null }
 
+            // Các trường đa ngôn ngữ (tuỳ chọn - nếu không có sẽ tự động fallback về title & message gốc)
             val titleEn = root.optString("title_en", "").ifBlank { null }
             val messageEn = root.optString("message_en", "").ifBlank { null }
             val actionTextEn = root.optString("action_text_en", "").ifBlank { null }
-            val titleVi = root.optString("title_vi", "").ifBlank { null }
-            val messageVi = root.optString("message_vi", "").ifBlank { null }
-            val actionTextVi = root.optString("action_text_vi", "").ifBlank { null }
+
+            val titleVi = root.optString("title_vi", "").ifBlank { null } ?: title.ifBlank { null }
+            val messageVi = root.optString("message_vi", "").ifBlank { null } ?: message.ifBlank { null }
+            val actionTextVi = root.optString("action_text_vi", "").ifBlank { null } ?: actionText
 
             RemoteNotice(
                 active = active,

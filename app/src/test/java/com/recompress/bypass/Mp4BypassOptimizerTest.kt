@@ -151,6 +151,37 @@ class Mp4BypassOptimizerTest {
     }
 
     @Test
+    fun testRemoteNoticeLanguageFallback() = kotlinx.coroutines.runBlocking {
+        // Trường hợp 1: Chỉ viết tiếng Việt (title, message)
+        val noticeViOnly = RemoteNotice(
+            active = true,
+            level = "warning",
+            title = "Cảnh báo bảo trì",
+            message = "TikTok cập nhật thuật toán"
+        )
+        val viContent = NoticeTranslator.resolveNoticeContent(noticeViOnly, AppLanguage.VI)
+        assertEquals("Cảnh báo bảo trì", viContent.first)
+        assertEquals("TikTok cập nhật thuật toán", viContent.second)
+
+        val enFallback = NoticeTranslator.resolveNoticeContent(noticeViOnly, AppLanguage.EN)
+        assertEquals("Cảnh báo bảo trì", enFallback.first) // Tự fallback về gốc
+        assertEquals("TikTok cập nhật thuật toán", enFallback.second)
+
+        // Trường hợp 2: Có viết thêm bản tiếng Anh
+        val noticeWithEn = RemoteNotice(
+            active = true,
+            level = "info",
+            title = "Cập nhật quan trọng",
+            message = "Đã có bản vá lỗi",
+            titleEn = "Important Update",
+            messageEn = "Bug fix available"
+        )
+        val enResolved = NoticeTranslator.resolveNoticeContent(noticeWithEn, AppLanguage.EN)
+        assertEquals("Important Update", enResolved.first)
+        assertEquals("Bug fix available", enResolved.second)
+    }
+
+    @Test
     fun testOptimizeRealSampleVideo() {
         val sampleFile = java.io.File("G:/videos/davinci export/AI.mp4")
         if (!sampleFile.exists()) return
