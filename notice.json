@@ -1,9 +1,9 @@
 {
   "active": true,
   "level": "info",
-  "title": "Đã có bản mới.",
+  "title": "Thông báo nhỏ",
   "message": "Delay v1.1.2 do thằng dev muốn test tính năng mới hoặc lười và bận🫩✌️",
   "block_actions": false,
-  "action_text": "Update here *you can hide this btw* ",
+  "action_text": "v1.1.1 latest* ",
   "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.1"
 }
