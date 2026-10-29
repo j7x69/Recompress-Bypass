@@ -2,7 +2,7 @@
   "active": true,
   "level": "info",
   "title": "Đã có bản mới.",
-  "message": "Bản mới nhất là v1.1.1, sắp tới v1.1.2 sẽ update giao diện và fix lỗi tiếng anh",
+  "message": "Delay v1.1.2 do thằng dev muốn test tính năng mới hoặc lười và bận🫩✌️",
   "block_actions": false,
   "action_text": "Update here *you can hide this btw* ",
   "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.1"
