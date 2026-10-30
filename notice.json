@@ -1,12 +1,12 @@
 {
-  "active": false,
-  "level": "warning",
-  "title": "Thông báo từ nhà phát triển",
-  "message": "TikTok đang cập nhật thuật toán. Nếu gặp lỗi khi bypass, vui lòng báo cáo tại GitHub.",
-  "action_text": "Xem chi tiết",
-  "action_url": "https://github.com/j7x69/Recompress-Bypass/issues",
+  "active": true,
+  "level": "info",
+  "title": "v1.1.4 available",
+  "message": "...",
+  "action_text": "view",
+  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.4",
   "block_actions": false,
-  "title_en": "Notice from Developer",
-  "message_en": "TikTok is updating algorithm. If you encounter issues, please report on GitHub.",
-  "action_text_en": "View Details"
+  "title_en": "",
+  "message_en": "",
+  "action_text_en": "View"
 }
