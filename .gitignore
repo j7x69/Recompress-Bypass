@@ -1,17 +1,21 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+.idea/
 .DS_Store
 /build
+app/build/
 /captures
 .externalNativeBuild
 .cxx
 local.properties
-/*.apk
+
+# Build artifacts & binaries
+*.apk
+*.aab
+release/
+
+# Sensitive & private project notes
 security-audit.md
+build_release.bat
+AGENTS.md
