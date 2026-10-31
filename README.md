@@ -48,8 +48,6 @@ Pre-built, optimized APKs are available in the [Releases](https://github.com/j7x
 | Variant | Optimization | Target Architecture |
 |---|---|---|
 | **Release APK** | R8 / ProGuard Minified, ShrinkResources | ARM64 / universal |
-| **Debug APK** | Standard build with logging tools | All debug devices |
-
 Requirements:
 * **Android 8.0 (API 26)** or higher.
 * Compatible with Android 14 & 15.
@@ -92,8 +90,6 @@ This project is licensed under the **[Creative Commons Attribution-NonCommercial
 3. **Loại bỏ atom rác (`tmcd`, `tref`)**: Dọn sạch các metadata độc hại từ phần mềm dựng phim, chuẩn hóa timescale về 1000 Hz.
 4. **Gắn ByteDance Ingest Tag**: Bổ sung cờ nhận diện luồng (`te_is_reencode = 1`, `Lavf63.7.100`) giúp hệ thống kiểm duyệt TikTok hiểu video đã qua tối ưu hóa.
 5. **Cấu trúc FastStart chuẩn quốc tế**: Đưa cấu trúc container về dạng `ftyp` ➔ `moov` ➔ `free` ➔ `mdat` giúp tải nhanh tức thì và không bị lỗi buffer.
-6. **Khử dấu vết metadata**: Tự động dọn sạch các chữ ký watermark từ các công cụ cũ (Haze, Vague, Nova Normal).
-
 ---
 
 ### 📱 Tính Năng Bổ Trợ
