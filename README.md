@@ -1,7 +1,7 @@
 # RecompressBypass 🚀
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-green.svg)](https://developer.android.com)
-[![Version](https://img.shields.io/badge/Version-1.1.4-blue.svg)](https://github.com/j7x69/Recompress-Bypass/releases)
+[![Version](https://img.shields.io/badge/Version-1.1.5-blue.svg)](https://github.com/j7x69/Recompress-Bypass/releases)
 [![Language](https://img.shields.io/badge/Language-Kotlin%20%7C%20Jetpack%20Compose-purple.svg)](https://kotlinlang.org)
 [![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-red.svg)](./LICENSE)
 
@@ -65,7 +65,7 @@ cd Recompress-Bypass
 # Build Release APK
 .\gradlew.bat assembleRelease
 
-# Output location: release/RecompressBypass-v1.1.4-release.apk
+# Output location: release/RecompressBypass-v1.1.5-release.apk
 ```
 
 ---

@@ -134,7 +134,13 @@ data class AppStringsData(
     val updateLater: String,
     val updateNow: String,
     val updateError: String,
-    val engineFeatures: String
+    val engineFeatures: String,
+    val sponsorMeBtn: String,
+    val sponsorDialogTitle: String,
+    val sponsorDialogSubtitle: String,
+    val sponsorDialogBody: String,
+    val sponsorLaterBtn: String,
+    val sponsorNowBtn: String
 )
 
 object AppStrings {
@@ -235,7 +241,13 @@ object AppStrings {
                 "• Lossless Passthrough: Preserves 100% original video stream data without quality degradation\n" +
                 "• Stream Cleanup: Completely purges corrupted and incompatible metadata tracks\n" +
                 "• Audio Stream Enhancement: Boosts audio fidelity and sample synchronization\n" +
-                "• Ingestion Compatibility: Optimizes native container tags for social platform algorithms"
+                "• Ingestion Compatibility: Optimizes native container tags for social platform algorithms",
+        sponsorMeBtn = "Sponsor Me",
+        sponsorDialogTitle = "Support the Developer",
+        sponsorDialogSubtitle = "Keep RecompressBypass 100% Free & Ad-Free",
+        sponsorDialogBody = "Your video has been optimized with zero quality loss! 🎉\n\nRecompressBypass is built and maintained independently — completely free, open-source, with no ads or paywalls. If this tool helps keep your TikTok videos crystal clear, consider supporting the author via GitHub Sponsors!",
+        sponsorLaterBtn = "Later",
+        sponsorNowBtn = "Sponsor Now ↗"
     )
 
     val VI = AppStringsData(
@@ -335,7 +347,13 @@ object AppStrings {
                 "• Bảo toàn nguyên gốc: Giữ nguyên 100% dữ liệu luồng video, không suy hao điểm ảnh\n" +
                 "• Dọn dẹp dữ liệu rác: Loại bỏ triệt để các track lỗi gây cấm đăng hoặc giảm nét\n" +
                 "• Tối ưu âm thanh: Chuẩn hóa mẫu âm thanh và luồng phát cho độ chi tiết cao nhất\n" +
-                "• Tương thích nền tảng: Tối ưu thẻ nạp nội bộ tương thích tối đa với mạng xã hội"
+                "• Tương thích nền tảng: Tối ưu thẻ nạp nội bộ tương thích tối đa với mạng xã hội",
+        sponsorMeBtn = "Sponsor Me",
+        sponsorDialogTitle = "Ủng hộ Tác Giả (Sponsor)",
+        sponsorDialogSubtitle = "Giữ ứng dụng 100% miễn phí & không quảng cáo",
+        sponsorDialogBody = "Video của bạn đã được xử lý giữ nguyên 100% độ nét gốc! 🎉\n\nRecompressBypass được phát triển độc lập, miễn phí hoàn toàn, không quảng cáo và không thu phí tính năng. Nếu ứng dụng giúp ích cho kênh TikTok của bạn, hãy cân nhắc ủng hộ tác giả một ly cà phê qua GitHub Sponsors nhé!",
+        sponsorLaterBtn = "Để lần sau",
+        sponsorNowBtn = "Ủng hộ ngay ↗"
     )
 
     fun forLanguage(language: AppLanguage): AppStringsData {

@@ -13,8 +13,8 @@ android {
         applicationId = "com.recompress.bypass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11400
-        versionName = "1.1.4"
+        versionCode = 11500
+        versionName = "1.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
