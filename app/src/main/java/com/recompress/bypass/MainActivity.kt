@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lightbulb
@@ -110,6 +111,54 @@ data class VideoMetadata(
     val durationSec: String,
     val thumbnail: Bitmap?
 )
+
+object SponsorPromptManager {
+    const val GITHUB_SPONSOR_URL = "https://github.com/sponsors/j7x69"
+    private const val PREFS_NAME = "app_prefs"
+    private const val KEY_OPT_COUNT = "sponsor_opt_success_count"
+    private const val KEY_NEXT_PROMPT_AT = "sponsor_next_prompt_at"
+    private const val KEY_LATER_COUNT = "sponsor_later_count"
+    private const val KEY_SPONSOR_CLICKED = "sponsor_already_clicked"
+
+    /**
+     * Điều phối hiển thị popup Sponsor thông minh (không spam người dùng):
+     * - Lần đầu tiên chạy fix video thành công (count == 1): hiện popup.
+     * - Nếu ấn "Later" lần 1: hẹn hiển thị lại ở lần fix thứ 5 (cách 4 video).
+     * - Nếu ấn "Later" lần 2: hẹn hiển thị lại ở lần fix thứ 11 (cách 6 video).
+     * - Nếu ấn "Later" các lần tiếp theo: cứ mỗi 10 lần fix thành công mới hỏi lại 1 lần (21, 31, 41...).
+     * - Nếu người dùng đã bấm nút Sponsor ủng hộ: không tự động hiện popup nữa.
+     */
+    fun onVideoOptimizeSuccess(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (sp.getBoolean(KEY_SPONSOR_CLICKED, false)) {
+            return false
+        }
+        val count = sp.getInt(KEY_OPT_COUNT, 0) + 1
+        val nextPromptAt = sp.getInt(KEY_NEXT_PROMPT_AT, 1)
+        val editor = sp.edit().putInt(KEY_OPT_COUNT, count)
+
+        return if (count >= nextPromptAt) {
+            val laterCount = sp.getInt(KEY_LATER_COUNT, 0) + 1
+            val step = when (laterCount) {
+                1 -> 4   // Hiển thị lại ở lần thứ 5
+                2 -> 6   // Hiển thị lại ở lần thứ 11
+                else -> 10 // Các lần sau cách mỗi 10 video
+            }
+            editor.putInt(KEY_LATER_COUNT, laterCount)
+            editor.putInt(KEY_NEXT_PROMPT_AT, count + step)
+            editor.apply()
+            true
+        } else {
+            editor.apply()
+            false
+        }
+    }
+
+    fun markSponsorClicked(context: Context) {
+        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_SPONSOR_CLICKED, true).apply()
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -212,6 +261,7 @@ fun MinimalistOptimizerApp(
     var showAdvancedThemeDialog by remember { mutableStateOf(false) }
     var showPlayProtectDialog by remember { mutableStateOf(false) }
     var showTikTokAuditDialog by remember { mutableStateOf(false) }
+    var showSponsorDialog by remember { mutableStateOf(false) }
 
     var wallpaperBitmap by remember { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(customThemeConfig.wallpaperPath) {
@@ -317,6 +367,10 @@ fun MinimalistOptimizerApp(
                 currentSavedRecord = savedRecord
                 if (savedRecord != null) {
                     historyList = HistoryRepository.loadHistory(context)
+                    if (SponsorPromptManager.onVideoOptimizeSuccess(context)) {
+                        kotlinx.coroutines.delay(450L)
+                        showSponsorDialog = true
+                    }
                 }
             }
         }
@@ -1225,6 +1279,24 @@ fun MinimalistOptimizerApp(
             onDismiss = { showPlayProtectDialog = false }
         )
     }
+
+    // ================= MODAL ỦNG HỘ TÁC GIẢ (GITHUB SPONSORS) =================
+    if (showSponsorDialog) {
+        SponsorPromptDialog(
+            strings = strings,
+            onDismiss = { showSponsorDialog = false },
+            onSponsorClick = {
+                SponsorPromptManager.markSponsorClicked(context)
+                showSponsorDialog = false
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SponsorPromptManager.GITHUB_SPONSOR_URL))
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
 }
 
 // ================= THẺ VIDEO LỊCH SỬ DARK AMOLED =================
@@ -1433,7 +1505,10 @@ fun AppSettingsDialog(
                                 )
 
                                 Spacer(modifier = Modifier.height(10.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
                                     OutlinedButton(
                                         onClick = {
                                             try {
@@ -1447,11 +1522,11 @@ fun AppSettingsDialog(
                                         shape = RoundedCornerShape(8.dp),
                                         colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textPrimary),
                                         border = BorderStroke(1.dp, appColors.borderFocus),
-                                        contentPadding = PaddingValues(horizontal = 10.dp)
+                                        contentPadding = PaddingValues(horizontal = 9.dp)
                                     ) {
                                         Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(13.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text(strings.openGithub, fontSize = 11.sp)
+                                        Text(strings.openGithub, fontSize = 10.5.sp, maxLines = 1)
                                     }
 
                                     OutlinedButton(
@@ -1464,11 +1539,36 @@ fun AppSettingsDialog(
                                         shape = RoundedCornerShape(8.dp),
                                         colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textSecondary),
                                         border = BorderStroke(1.dp, appColors.borderSubtle),
-                                        contentPadding = PaddingValues(horizontal = 10.dp)
+                                        contentPadding = PaddingValues(horizontal = 9.dp)
                                     ) {
                                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text(strings.copy, fontSize = 11.sp)
+                                        Text(strings.copy, fontSize = 10.5.sp, maxLines = 1)
+                                    }
+
+                                    val sponsorPink = Color(0xFFEA4AAA)
+                                    Button(
+                                        onClick = {
+                                            SponsorPromptManager.markSponsorClicked(context)
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SponsorPromptManager.GITHUB_SPONSOR_URL))
+                                                context.startActivity(intent)
+                                            } catch (_: Exception) {
+                                                Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        modifier = Modifier.height(32.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = sponsorPink.copy(alpha = 0.16f),
+                                            contentColor = sponsorPink
+                                        ),
+                                        border = BorderStroke(1.dp, sponsorPink.copy(alpha = 0.65f)),
+                                        contentPadding = PaddingValues(horizontal = 9.dp)
+                                    ) {
+                                        Icon(Icons.Default.Favorite, contentDescription = null, tint = sponsorPink, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(strings.sponsorMeBtn, color = sponsorPink, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                                     }
                                 }
                             }
@@ -3398,6 +3498,156 @@ fun PlayProtectHelpDialog(
                     border = BorderStroke(1.dp, appColors.border)
                 ) {
                     Text(strings.playProtectGotIt, color = appColors.textPrimary, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+// ================= MODAL ỦNG HỘ TÁC GIẢ (GITHUB SPONSORS) =================
+@Composable
+fun SponsorPromptDialog(
+    strings: AppStringsData,
+    onDismiss: () -> Unit,
+    onSponsorClick: () -> Unit
+) {
+    val appColors = LocalAppColors.current
+    val sponsorPink = Color(0xFFEA4AAA)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(appColors.surface)
+                .border(1.dp, sponsorPink.copy(alpha = 0.45f), RoundedCornerShape(22.dp))
+                .padding(20.dp)
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(sponsorPink.copy(alpha = 0.16f))
+                                .border(1.dp, sponsorPink.copy(alpha = 0.5f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = null,
+                                tint = sponsorPink,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = strings.sponsorDialogTitle,
+                                color = appColors.textPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = strings.sponsorDialogSubtitle,
+                                color = sponsorPink,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = strings.close,
+                            tint = appColors.textMuted
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(appColors.surfaceInput)
+                        .border(1.dp, appColors.borderSubtle, RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = strings.sponsorDialogBody,
+                            color = appColors.textSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "github.com/sponsors/j7x69",
+                            color = sponsorPink,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textSecondary),
+                        border = BorderStroke(1.dp, appColors.border)
+                    ) {
+                        Text(strings.sponsorLaterBtn, fontSize = 12.5.sp)
+                    }
+
+                    Button(
+                        onClick = onSponsorClick,
+                        modifier = Modifier
+                            .weight(1.3f)
+                            .fillMaxHeight(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = sponsorPink.copy(alpha = 0.2f),
+                            contentColor = sponsorPink
+                        ),
+                        border = BorderStroke(1.dp, sponsorPink)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = null,
+                            tint = sponsorPink,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = strings.sponsorNowBtn,
+                            color = sponsorPink,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
