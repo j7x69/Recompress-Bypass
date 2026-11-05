@@ -1,12 +1,12 @@
 {
   "active": true,
-  "level": "info",
-  "title": "v1.1.5 available",
-  "message": "...",
-  "action_text": "view",
-  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/tag/v1.1.5",
-  "block_actions": false,
+  "level": "warning",
+  "title": "Video Optimizer Not Available",
+  "message": "TikTok Destroy the method again. The developer noticed it and is investigating a fix. Since the method doesn't work anymore. we will lock down the app",
+  "action_text": "",
+  "action_url": "",
+  "block_actions": true,
   "title_en": "",
   "message_en": "",
-  "action_text_en": "View"
+  "action_text_en": ""
 }
