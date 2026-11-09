@@ -5,7 +5,7 @@
   "message": "In Testing phase. we will lock down the Optimizer section. ",
   "action_text": "",
   "action_url": "",
-  "block_actions": true,
+  "block_actions": false,
   "title_en": "",
   "message_en": "",
   "action_text_en": ""
