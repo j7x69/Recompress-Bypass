@@ -2,6 +2,7 @@ package com.recompress.bypass
 
 import android.content.Context
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.core.content.edit
 
 enum class AppLanguage(
     val code: String,
@@ -41,12 +42,13 @@ object LanguagePreferences {
 
     fun saveLanguage(context: Context, language: AppLanguage) {
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sp.edit().putString(KEY_LANGUAGE, language.code).apply()
+        sp.edit { putString(KEY_LANGUAGE, language.code) }
     }
 }
 
 val LocalAppLanguage = staticCompositionLocalOf { AppLanguage.EN }
 
+@Suppress("unused")
 data class AppStringsData(
     val appTitle: String,
     val appSubtitle: String,
@@ -72,10 +74,6 @@ data class AppStringsData(
     val languageDesc: String,
     val appearanceTitle: String,
     val appearanceDesc: String,
-    val engineV4Title: String,
-    val playProtectTitle: String,
-    val playProtectDesc: String,
-    val viewGuide: String,
     val close: String,
     val newUpdateBannerTitle: String,
     val newUpdateBannerSub: String,
@@ -107,12 +105,6 @@ data class AppStringsData(
     val resetThemeBtn: String,
     val applyThemeBtn: String,
     val noWallpaperSelected: String,
-    val playProtectDialogTitle: String,
-    val playProtectWhyTitle: String,
-    val playProtectWhyContent: String,
-    val playProtectHowTitle: String,
-    val playProtectHowContent: String,
-    val playProtectGotIt: String,
     val logCompressingTitle: String,
     val logFailedTitle: String,
     val logSuccessTitle: String,
@@ -134,13 +126,16 @@ data class AppStringsData(
     val updateLater: String,
     val updateNow: String,
     val updateError: String,
-    val engineFeatures: String,
     val sponsorMeBtn: String,
     val sponsorDialogTitle: String,
     val sponsorDialogSubtitle: String,
     val sponsorDialogBody: String,
     val sponsorLaterBtn: String,
-    val sponsorNowBtn: String
+    val sponsorNowBtn: String,
+    val featureBlockedPrefix: String,
+    val playVideoChooser: String,
+    val noVideoPlayerFound: String,
+    val videoFileNotFound: String
 )
 
 object AppStrings {
@@ -157,9 +152,18 @@ object AppStrings {
         tips = listOf(
             Pair("💡 Optimal Export Specs", "Render at 1080x1920 (9:16) 60 FPS for maximum social media clarity."),
             Pair("⚡ Target Bitrate", "Keep bitrate under 15 Mbps to prevent platforms from heavy compression."),
-            Pair("🚀 TikTok Studio Upload", "Use the 'Upload video' button to post via Studio without mobile app re-encoding."),
-            Pair("🎬 Lossless Passthrough", "Preserves 100% video stream data without lossy pixel transcoding."),
-            Pair("⚡ FastStart Container", "Positions metadata at the front for instant streaming without buffering.")
+            Pair(
+                "🚀 TikTok Studio Upload",
+                "Use the 'Upload video' button to open TikTok Studio in your browser."
+            ),
+            Pair(
+                "🎬 Lossless Quality",
+                "Preserves 100% original video clarity without quality loss."
+            ),
+            Pair(
+                "⚡ Instant Processing",
+                "Optimizes video files in milliseconds directly on your device."
+            )
         ),
         settingsTitle = "Settings & About",
         authorGithub = "Author GitHub",
@@ -175,10 +179,6 @@ object AppStrings {
         languageDesc = "Select application display language",
         appearanceTitle = "Appearance Theme",
         appearanceDesc = "Choose your preferred visual theme",
-        engineV4Title = "Video Optimization Engine",
-        playProtectTitle = "Play Protect & APK Security Guide",
-        playProtectDesc = "Learn how to bypass false Google Play Protect warnings when sideloading APK.",
-        viewGuide = "View Guide ↗",
         close = "Close",
         newUpdateBannerTitle = "New update: %s",
         newUpdateBannerSub = "Tap to view changelog and update (%s)",
@@ -210,12 +210,6 @@ object AppStrings {
         resetThemeBtn = "Reset Defaults",
         applyThemeBtn = "Save & Apply",
         noWallpaperSelected = "No custom wallpaper selected yet",
-        playProtectDialogTitle = "Disable APK Scan Warnings",
-        playProtectWhyTitle = "Why does the scan prompt appear?",
-        playProtectWhyContent = "Because this APK is sideloaded outside Google Play, Google Play Protect or OEM security scanners (Xiaomi/Samsung/Oppo) automatically prompt before allowing installation.",
-        playProtectHowTitle = "How to bypass permanently:",
-        playProtectHowContent = "1. In Google Play Store (Play Protect):\n• Open Google Play ➔ Tap Profile avatar on top right.\n• Tap Play Protect ➔ Tap Gear icon ⚙️ on top right.\n• Turn OFF: 'Improve harmful app detection'.\n\n2. For Xiaomi / HyperOS / MIUI:\n• Open Security app ➔ Settings ⚙️ ➔ Security scan.\n• Turn off: 'Scan before installing'.\n\n3. In-App Updates:\n• Updates downloaded directly inside this app are safe and will overwrite seamlessly.",
-        playProtectGotIt = "Got it",
         logCompressingTitle = "Optimizing video...",
         logFailedTitle = "Optimization Failed",
         logSuccessTitle = "Optimization Complete!",
@@ -227,7 +221,7 @@ object AppStrings {
         logToastDiscordFail = "Cannot connect to Discord (please retry)",
         historyProjectPrefix = "Project: %s",
         historyStoragePath = "Saved path:",
-        historyViewAllLogs = "View full processing logs",
+        historyViewAllLogs = "View processing logs",
         historyPlayVideo = "Play Video",
         historyCopyLogs = "Copy",
         historyCopiedLogs = "Copied all logs to clipboard!",
@@ -237,17 +231,16 @@ object AppStrings {
         updateLater = "Later",
         updateNow = "Update Now",
         updateError = "Download failed. Please try again later.",
-        engineFeatures = "• FastStart Streaming: Repositions container metadata (moov) to the front for instant playback\n" +
-                "• Lossless Passthrough: Preserves 100% original video stream data without quality degradation\n" +
-                "• Stream Cleanup: Completely purges corrupted and incompatible metadata tracks\n" +
-                "• Audio Stream Enhancement: Boosts audio fidelity and sample synchronization\n" +
-                "• Ingestion Compatibility: Optimizes native container tags for social platform algorithms",
         sponsorMeBtn = "Sponsor Me",
         sponsorDialogTitle = "Support the Developer",
         sponsorDialogSubtitle = "Keep RecompressBypass 100% Free & Ad-Free",
         sponsorDialogBody = "Your video has been optimized with zero quality loss! 🎉\n\nRecompressBypass is built and maintained independently — completely free, open-source, with no ads or paywalls. If this tool helps keep your TikTok videos crystal clear, consider supporting the author via GitHub Sponsors!",
         sponsorLaterBtn = "Later",
-        sponsorNowBtn = "Sponsor Now ↗"
+        sponsorNowBtn = "Sponsor Now ↗",
+        featureBlockedPrefix = "⚠️ Feature temporarily unavailable",
+        playVideoChooser = "Play video: %s",
+        noVideoPlayerFound = "No compatible video player found",
+        videoFileNotFound = "File '%s' was not found on device. It may have been moved or deleted."
     )
 
     val VI = AppStringsData(
@@ -263,9 +256,15 @@ object AppStrings {
         tips = listOf(
             Pair("💡 Thông số xuất chuẩn", "Nên xuất video ở 1080x1920 (9:16) 60 FPS để đạt độ nét cao nhất trên mạng xã hội."),
             Pair("⚡ Giữ Bitrate vừa phải", "Nên giữ bitrate dưới 15 Mbps để thuật toán nén của nền tảng không can thiệp làm mờ."),
-            Pair("🚀 Đăng qua TikTok Studio", "Dùng nút 'Đăng video' trong app để đăng qua giao diện Studio, giữ trọn độ nét gốc."),
-            Pair("🎬 Bảo toàn 100% nguyên bản", "Giữ nguyên luồng hình ảnh & âm thanh gốc, không giải mã nén lại gây suy hao."),
-            Pair("⚡ Cấu trúc FastStart", "Tối ưu vị trí dữ liệu lên đầu file giúp video phát ngay tức thì không cần đợi đệm.")
+            Pair(
+                "🚀 Đăng qua TikTok Studio",
+                "Dùng nút 'Đăng video' để mở TikTok Studio trên trình duyệt, giữ trọn độ nét gốc."
+            ),
+            Pair(
+                "🎬 Bảo toàn 100% nguyên bản",
+                "Giữ nguyên chất lượng hình ảnh & âm thanh gốc, không suy hao."
+            ),
+            Pair("⚡ Xử lý siêu tốc", "Tối ưu video chỉ trong tích tắc ngay trên thiết bị của bạn.")
         ),
         settingsTitle = "Cài đặt & Giới thiệu",
         authorGithub = "GitHub Tác Giả",
@@ -281,10 +280,6 @@ object AppStrings {
         languageDesc = "Chọn ngôn ngữ hiển thị ứng dụng",
         appearanceTitle = "Chế độ Giao diện",
         appearanceDesc = "Chọn tông màu giao diện bạn thích",
-        engineV4Title = "Cơ chế Tối ưu Video (Engine V4)",
-        playProtectTitle = "Trợ Giúp Quét APK & Play Protect",
-        playProtectDesc = "Hướng dẫn vượt qua cảnh báo sai của Google Play Protect khi cài file APK ngoài.",
-        viewGuide = "Xem hướng dẫn ↗",
         close = "Đóng",
         newUpdateBannerTitle = "Bản cập nhật mới: %s",
         newUpdateBannerSub = "Chạm để xem ghi chú và cập nhật (%s)",
@@ -316,12 +311,6 @@ object AppStrings {
         resetThemeBtn = "Đặt lại mặc định",
         applyThemeBtn = "Lưu & Áp dụng",
         noWallpaperSelected = "Chưa chọn ảnh nền cá nhân nào",
-        playProtectDialogTitle = "Mẹo tắt cảnh báo quét APK",
-        playProtectWhyTitle = "Tại sao lại có thông báo quét?",
-        playProtectWhyContent = "Do APK cài ngoài Google Play (sideload), Google Play Protect hoặc trình quét bảo mật của máy (Xiaomi/Samsung/Oppo) sẽ tự động hiện thông báo hỏi quét trước khi cho cài.",
-        playProtectHowTitle = "Cách tắt vĩnh viễn (Không bao giờ hỏi lại):",
-        playProtectHowContent = "1. Tắt trong CH Play (Google Play Protect):\n• Mở app CH Play ➔ Bấm vào Ảnh đại diện góc trên phải.\n• Chọn Play Protect ➔ Bấm icon Bánh răng ⚙️ ở góc phải.\n• TẮT mục: 'Cải thiện khả năng phát hiện ứng dụng độc hại'.\n\n2. Đối với máy Xiaomi / HyperOS / MIUI:\n• Mở app Bảo mật ➔ Bánh răng ⚙️ ➔ Quét bảo mật.\n• Tắt: 'Quét trước khi cài đặt'.\n\n3. Tính năng Tự động Cập nhật trong app:\n• Cập nhật ngay trong app sẽ tải từ GitHub Release và cài đặt đè trực tiếp.",
-        playProtectGotIt = "Đã hiểu",
         logCompressingTitle = "Đang tối ưu video...",
         logFailedTitle = "Tối ưu thất bại",
         logSuccessTitle = "Tối ưu hoàn tất!",
@@ -333,7 +322,7 @@ object AppStrings {
         logToastDiscordFail = "Không thể kết nối Discord (vui lòng thử lại)",
         historyProjectPrefix = "Dự án: %s",
         historyStoragePath = "Đường dẫn lưu:",
-        historyViewAllLogs = "Xem toàn bộ nhật ký xử lý",
+        historyViewAllLogs = "Xem nhật ký xử lý",
         historyPlayVideo = "Phát video",
         historyCopyLogs = "Sao chép",
         historyCopiedLogs = "Đã sao chép toàn bộ log!",
@@ -343,17 +332,16 @@ object AppStrings {
         updateLater = "Để sau",
         updateNow = "Cập nhật ngay",
         updateError = "Lỗi khi tải file. Vui lòng thử lại sau.",
-        engineFeatures = "• Cấu trúc FastStart: Đưa metadata container lên đầu giúp video phát ngay tức thì\n" +
-                "• Bảo toàn nguyên gốc: Giữ nguyên 100% dữ liệu luồng video, không suy hao điểm ảnh\n" +
-                "• Dọn dẹp dữ liệu rác: Loại bỏ triệt để các track lỗi gây cấm đăng hoặc giảm nét\n" +
-                "• Tối ưu âm thanh: Chuẩn hóa mẫu âm thanh và luồng phát cho độ chi tiết cao nhất\n" +
-                "• Tương thích nền tảng: Tối ưu thẻ nạp nội bộ tương thích tối đa với mạng xã hội",
         sponsorMeBtn = "Sponsor Me",
         sponsorDialogTitle = "Ủng hộ Tác Giả (Sponsor)",
         sponsorDialogSubtitle = "Giữ ứng dụng 100% miễn phí & không quảng cáo",
         sponsorDialogBody = "Video của bạn đã được xử lý giữ nguyên 100% độ nét gốc! 🎉\n\nRecompressBypass được phát triển độc lập, miễn phí hoàn toàn, không quảng cáo và không thu phí tính năng. Nếu ứng dụng giúp ích cho kênh TikTok của bạn, hãy cân nhắc ủng hộ tác giả một ly cà phê qua GitHub Sponsors nhé!",
         sponsorLaterBtn = "Để lần sau",
-        sponsorNowBtn = "Ủng hộ ngay ↗"
+        sponsorNowBtn = "Ủng hộ ngay ↗",
+        featureBlockedPrefix = "⚠️ Chức năng tạm thời không khả dụng",
+        playVideoChooser = "Phát video: %s",
+        noVideoPlayerFound = "Không tìm thấy trình phát video phù hợp",
+        videoFileNotFound = "Không tìm thấy file '%s' trên thiết bị. File có thể đã bị di chuyển hoặc xóa."
     )
 
     fun forLanguage(language: AppLanguage): AppStringsData {

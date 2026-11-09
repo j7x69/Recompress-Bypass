@@ -48,14 +48,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
@@ -63,11 +61,9 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -95,11 +91,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.edit
+import androidx.core.graphics.toColorInt
+import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import kotlin.math.max
 
 data class VideoMetadata(
@@ -135,28 +135,27 @@ object SponsorPromptManager {
         }
         val count = sp.getInt(KEY_OPT_COUNT, 0) + 1
         val nextPromptAt = sp.getInt(KEY_NEXT_PROMPT_AT, 1)
-        val editor = sp.edit().putInt(KEY_OPT_COUNT, count)
+        val shouldPrompt = count >= nextPromptAt
 
-        return if (count >= nextPromptAt) {
-            val laterCount = sp.getInt(KEY_LATER_COUNT, 0) + 1
-            val step = when (laterCount) {
-                1 -> 4   // Hiển thị lại ở lần thứ 5
-                2 -> 6   // Hiển thị lại ở lần thứ 11
-                else -> 10 // Các lần sau cách mỗi 10 video
+        sp.edit {
+            putInt(KEY_OPT_COUNT, count)
+            if (shouldPrompt) {
+                val laterCount = sp.getInt(KEY_LATER_COUNT, 0) + 1
+                val step = when (laterCount) {
+                    1 -> 4   // Hiển thị lại ở lần thứ 5
+                    2 -> 6   // Hiển thị lại ở lần thứ 11
+                    else -> 10 // Các lần sau cách mỗi 10 video
+                }
+                putInt(KEY_LATER_COUNT, laterCount)
+                putInt(KEY_NEXT_PROMPT_AT, count + step)
             }
-            editor.putInt(KEY_LATER_COUNT, laterCount)
-            editor.putInt(KEY_NEXT_PROMPT_AT, count + step)
-            editor.apply()
-            true
-        } else {
-            editor.apply()
-            false
         }
+        return shouldPrompt
     }
 
     fun markSponsorClicked(context: Context) {
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sp.edit().putBoolean(KEY_SPONSOR_CLICKED, true).apply()
+        sp.edit { putBoolean(KEY_SPONSOR_CLICKED, true) }
     }
 }
 
@@ -259,7 +258,6 @@ fun MinimalistOptimizerApp(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showAppearanceDialog by remember { mutableStateOf(false) }
     var showAdvancedThemeDialog by remember { mutableStateOf(false) }
-    var showPlayProtectDialog by remember { mutableStateOf(false) }
     var showTikTokAuditDialog by remember { mutableStateOf(false) }
     var showSponsorDialog by remember { mutableStateOf(false) }
 
@@ -268,15 +266,19 @@ fun MinimalistOptimizerApp(
         val path = customThemeConfig.wallpaperPath
         wallpaperBitmap = if (path != null && File(path).exists()) {
             withContext(Dispatchers.IO) {
-                try { BitmapFactory.decodeFile(path) } catch (e: Exception) { null }
+                try {
+                    BitmapFactory.decodeFile(path)
+                } catch (_: Exception) {
+                    null
+                }
             }
         } else null
     }
 
     LaunchedEffect(Unit) {
-        // Tự động dọn dẹp các tệp rác, video blob mồ côi từ WebView cũ và thumbnail thừa
+        // Tự động dọn dẹp các tệp tạm cũ và thumbnail mồ côi
         launch(Dispatchers.IO) {
-            WebViewCleanupHelper.cleanDiskGarbage(context)
+            cleanLegacyTempFiles(context)
             val currentRecords = HistoryRepository.loadHistory(context)
             val activeThumbs = currentRecords.mapNotNull { it.thumbnailFileName }.toSet()
             HistoryRepository.cleanOrphanThumbnails(context, activeThumbs)
@@ -305,13 +307,14 @@ fun MinimalistOptimizerApp(
         }
     }
 
-    // Trạng thái màn hình WebView TikTok Studio
-    var showTikTokStudio by remember { mutableStateOf(false) }
-
     // Trạng thái Live Log Dialog khi đang tối ưu
     var isCompressing by remember { mutableStateOf(false) }
     var currentCompressLogs by remember { mutableStateOf<List<String>>(emptyList()) }
-    var currentCompressStatus by remember { mutableStateOf("Chuẩn bị xử lý...") }
+    var currentCompressStatus by remember {
+        mutableStateOf(
+            if (currentLanguage == AppLanguage.EN) "Preparing..." else "Chuẩn bị xử lý..."
+        )
+    }
     var currentSavedRecord by remember { mutableStateOf<CompressedVideoRecord?>(null) }
     var currentProcessingVideoMeta by remember { mutableStateOf<VideoMetadata?>(null) }
     var showLiveLogDialog by remember { mutableStateOf(false) }
@@ -335,10 +338,11 @@ fun MinimalistOptimizerApp(
                 showLiveLogDialog = true
                 isCompressing = true
                 currentCompressLogs = listOf(
-                    if (currentLanguage == AppLanguage.EN) "[START] Reading selected video metadata..."
-                    else "[START] Đang đọc metadata video được chọn..."
+                    if (currentLanguage == AppLanguage.EN) "[START] Reading video..."
+                    else "[START] Đang đọc video..."
                 )
-                currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Reading metadata..." else "Đang đọc metadata..."
+                currentCompressStatus =
+                    if (currentLanguage == AppLanguage.EN) "Reading video..." else "Đang đọc video..."
                 currentSavedRecord = null
 
                 val meta = extractVideoMetadata(context, uri)
@@ -349,16 +353,16 @@ fun MinimalistOptimizerApp(
                     context = context,
                     media = meta,
                     historyIndex = historyList.size,
+                    language = currentLanguage,
                     onLog = { logLine ->
                         newLogs.add(logLine)
                         currentCompressLogs = newLogs.toList()
                         when {
-                            logLine.startsWith("[FASTSTART]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Building FastStart container layout..." else "Đang cấu trúc FastStart container..."
-                            logLine.startsWith("[EXPLOIT 1]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Normalizing 64-bit container duration..." else "Bật tràn thời lượng 64-bit mvhd..."
-                            logLine.startsWith("[EXPLOIT 2]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Synchronizing audio sample rates..." else "Khởi tạo Ghost Audio Stream (10x)..."
-                            logLine.startsWith("[EXPLOIT 3]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Injecting platform compatibility tags..." else "Bơm thẻ nội bộ tương thích..."
-                            logLine.startsWith("[STREAM]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Streaming media payload (100% Lossless)..." else "Sao chép luồng mdat (100% Lossless)..."
-                            logLine.startsWith("[SUCCESS]") -> currentCompressStatus = if (currentLanguage == AppLanguage.EN) "Video optimization complete!" else "Hoàn tất tối ưu video!"
+                            logLine.startsWith("[PROCESS]") -> currentCompressStatus =
+                                if (currentLanguage == AppLanguage.EN) "Optimizing video..." else "Đang tối ưu video..."
+
+                            logLine.startsWith("[SUCCESS]") -> currentCompressStatus =
+                                if (currentLanguage == AppLanguage.EN) "Optimization complete!" else "Hoàn tất tối ưu video!"
                         }
                     }
                 )
@@ -376,14 +380,7 @@ fun MinimalistOptimizerApp(
         }
     }
 
-    if (showTikTokStudio) {
-        TikTokStudioScreen(
-            onClose = {
-                showTikTokStudio = false
-                historyList = HistoryRepository.loadHistory(context)
-            }
-        )
-    } else {
+    run {
         Box(
             modifier = Modifier.fillMaxSize()
         ) {
@@ -490,7 +487,11 @@ fun MinimalistOptimizerApp(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(appColors.warningSoft)
-                            .border(1.dp, appColors.warning.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                            .border(
+                                1.dp,
+                                appColors.warning.copy(alpha = 0.4f),
+                                RoundedCornerShape(14.dp)
+                            )
                             .clickable { showUpdateDialog = true }
                             .padding(horizontal = 14.dp, vertical = 11.dp)
                     ) {
@@ -565,28 +566,9 @@ fun MinimalistOptimizerApp(
                         else -> appColors.accentSoft
                     }
 
-                    var isShowingOriginal by remember(notice.title, notice.message) { mutableStateOf(false) }
-                    var resolvedTitle by remember(notice, currentLanguage) {
-                        mutableStateOf(notice.getExplicitTitle(currentLanguage) ?: notice.title)
-                    }
-                    var resolvedMessage by remember(notice, currentLanguage) {
-                        mutableStateOf(notice.getExplicitMessage(currentLanguage) ?: notice.message)
-                    }
-
-                    LaunchedEffect(notice, currentLanguage) {
-                        val (rTitle, rMsg) = NoticeTranslator.resolveNoticeContent(notice, currentLanguage)
-                        resolvedTitle = rTitle
-                        resolvedMessage = rMsg
-                    }
-
-                    val displayTitle = if (isShowingOriginal) notice.title else resolvedTitle
-                    val displayMessage = if (isShowingOriginal) notice.message else resolvedMessage
-                    val displayActionText = if (isShowingOriginal) {
-                        notice.actionText ?: strings.defaultActionText
-                    } else {
-                        notice.getActionTextForLang(currentLanguage)
-                    }
-                    val canToggleTranslate = (resolvedTitle != notice.title) || (resolvedMessage != notice.message)
+                    val displayTitle = notice.getTitleForLang(currentLanguage)
+                    val displayMessage = notice.getMessageForLang(currentLanguage)
+                    val displayActionText = notice.getActionTextForLang(currentLanguage)
 
                     Box(
                         modifier = Modifier
@@ -620,33 +602,16 @@ fun MinimalistOptimizerApp(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                if (canToggleTranslate) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(appColors.surfaceElevated.copy(alpha = 0.8f))
-                                            .border(0.7.dp, appColors.borderSubtle, RoundedCornerShape(6.dp))
-                                            .clickable { isShowingOriginal = !isShowingOriginal }
-                                            .padding(horizontal = 7.dp, vertical = 3.dp)
-                                    ) {
-                                        Text(
-                                            text = if (isShowingOriginal) strings.translateToggle else strings.originalToggle,
-                                            color = appColors.accentText,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                }
-
                                 if (!notice.blockActions || emergencyUnlock) {
                                     IconButton(
                                         onClick = {
                                             isNoticeVisible = false
-                                            prefs.edit().putString(
-                                                "dismissed_notice_key",
-                                                "${notice.title}__${notice.message}"
-                                            ).apply()
+                                            prefs.edit {
+                                                putString(
+                                                    "dismissed_notice_key",
+                                                    "${notice.title}__${notice.message}"
+                                                )
+                                            }
                                         },
                                         modifier = Modifier.size(22.dp)
                                     ) {
@@ -676,7 +641,8 @@ fun MinimalistOptimizerApp(
                                 Button(
                                     onClick = {
                                         try {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(notice.actionUrl))
+                                            val intent =
+                                                Intent(Intent.ACTION_VIEW, notice.actionUrl.toUri())
                                             context.startActivity(intent)
                                         } catch (_: Exception) {
                                             Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
@@ -729,10 +695,18 @@ fun MinimalistOptimizerApp(
                                 shape = RoundedCornerShape(20.dp)
                             )
                             .clickable {
-                                if (isActionBlocked) {
+                                if (availableUpdate?.hasUpdate == true && !emergencyUnlock) {
+                                    showUpdateDialog = true
+                                } else if (isActionBlocked) {
+                                    val blockedText = remoteNotice?.let { n ->
+                                        val t = n.getTitleForLang(currentLanguage)
+                                        val m = n.getMessageForLang(currentLanguage)
+                                        if (m.isNotBlank()) "${strings.featureBlockedPrefix}: $t\n$m"
+                                        else "${strings.featureBlockedPrefix}: $t"
+                                    } ?: strings.featureBlockedPrefix
                                     Toast.makeText(
                                         context,
-                                        "⚠️ Chức năng tạm khóa: ${remoteNotice?.title}\n${remoteNotice?.message}",
+                                        blockedText,
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } else {
@@ -757,13 +731,17 @@ fun MinimalistOptimizerApp(
                                         .height(20.dp)
                                         .clip(CircleShape)
                                         .background(appColors.accentSoft)
-                                        .border(0.7.dp, appColors.accent.copy(alpha = 0.5f), CircleShape)
+                                        .border(
+                                            0.7.dp,
+                                            appColors.accent.copy(alpha = 0.5f),
+                                            CircleShape
+                                        )
                                         .padding(horizontal = 8.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     @Suppress("DEPRECATION")
                                     Text(
-                                        text = "V4",
+                                        text = "HD",
                                         color = appColors.accentText,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
@@ -794,7 +772,7 @@ fun MinimalistOptimizerApp(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Movie,
-                                    contentDescription = "Tối ưu video",
+                                    contentDescription = strings.optCardTitle,
                                     tint = appColors.accent,
                                     modifier = Modifier.size(24.dp)
                                 )
@@ -836,7 +814,7 @@ fun MinimalistOptimizerApp(
                                 shape = RoundedCornerShape(20.dp)
                             )
                             .clickable {
-                                showTikTokStudio = true
+                                openTikTokStudioInBrowser(context, strings)
                             }
                             .padding(14.dp)
                     ) {
@@ -856,7 +834,11 @@ fun MinimalistOptimizerApp(
                                         .height(20.dp)
                                         .clip(CircleShape)
                                         .background(appColors.successSoft)
-                                        .border(0.7.dp, appColors.success.copy(alpha = 0.5f), CircleShape)
+                                        .border(
+                                            0.7.dp,
+                                            appColors.success.copy(alpha = 0.5f),
+                                            CircleShape
+                                        )
                                         .padding(horizontal = 8.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -945,7 +927,11 @@ fun MinimalistOptimizerApp(
                                 .size(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(appColors.accentSoft)
-                                .border(1.dp, appColors.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                                .border(
+                                    1.dp,
+                                    appColors.accent.copy(alpha = 0.5f),
+                                    RoundedCornerShape(12.dp)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1190,9 +1176,6 @@ fun MinimalistOptimizerApp(
             onOpenUpdateDialog = {
                 showUpdateDialog = true
             },
-            onOpenPlayProtectHelp = {
-                showPlayProtectDialog = true
-            },
             onOpenAdvancedTheme = {
                 showAdvancedThemeDialog = true
             },
@@ -1245,7 +1228,7 @@ fun MinimalistOptimizerApp(
             onDismiss = { showLiveLogDialog = false },
             onOpenTikTokStudio = {
                 showLiveLogDialog = false
-                showTikTokStudio = true
+                openTikTokStudioInBrowser(context, strings)
             }
         )
     }
@@ -1258,25 +1241,23 @@ fun MinimalistOptimizerApp(
             onDismiss = { selectedHistoryRecord = null },
             onOpenTikTokStudio = {
                 selectedHistoryRecord = null
-                showTikTokStudio = true
+                openTikTokStudioInBrowser(context, strings)
             }
         )
     }
 
-    // ================= MODAL CẬP NHẬT GITHUB RELEASE =================
-    if (showUpdateDialog && availableUpdate != null) {
+    // ================= MODAL CẬP NHẬT BẮT BUỘC GITHUB RELEASE =================
+    val isForceUpdate = (availableUpdate?.hasUpdate == true) && !emergencyUnlock
+    if ((showUpdateDialog || isForceUpdate) && availableUpdate != null) {
         AppUpdateDialog(
             updateInfo = availableUpdate!!,
             strings = strings,
-            onDismiss = { showUpdateDialog = false }
-        )
-    }
-
-    // ================= MODAL HƯỚNG DẪN TẮT CẢNH BÁO PLAY PROTECT =================
-    if (showPlayProtectDialog) {
-        PlayProtectHelpDialog(
-            strings = strings,
-            onDismiss = { showPlayProtectDialog = false }
+            isForceUpdate = isForceUpdate,
+            onDismiss = {
+                if (!isForceUpdate) {
+                    showUpdateDialog = false
+                }
+            }
         )
     }
 
@@ -1289,7 +1270,8 @@ fun MinimalistOptimizerApp(
                 SponsorPromptManager.markSponsorClicked(context)
                 showSponsorDialog = false
                 try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SponsorPromptManager.GITHUB_SPONSOR_URL))
+                    val intent =
+                        Intent(Intent.ACTION_VIEW, SponsorPromptManager.GITHUB_SPONSOR_URL.toUri())
                     context.startActivity(intent)
                 } catch (_: Exception) {
                     Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
@@ -1390,7 +1372,6 @@ fun AppSettingsDialog(
     onLanguageChange: (AppLanguage) -> Unit,
     onCheckUpdate: () -> Unit,
     onOpenUpdateDialog: () -> Unit,
-    onOpenPlayProtectHelp: () -> Unit,
     onOpenAdvancedTheme: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1512,7 +1493,10 @@ fun AppSettingsDialog(
                                     OutlinedButton(
                                         onClick = {
                                             try {
-                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(githubRepoUrl))
+                                                val intent = Intent(
+                                                    Intent.ACTION_VIEW,
+                                                    githubRepoUrl.toUri()
+                                                )
                                                 context.startActivity(intent)
                                             } catch (_: Exception) {
                                                 Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
@@ -1551,7 +1535,10 @@ fun AppSettingsDialog(
                                         onClick = {
                                             SponsorPromptManager.markSponsorClicked(context)
                                             try {
-                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SponsorPromptManager.GITHUB_SPONSOR_URL))
+                                                val intent = Intent(
+                                                    Intent.ACTION_VIEW,
+                                                    SponsorPromptManager.GITHUB_SPONSOR_URL.toUri()
+                                                )
                                                 context.startActivity(intent)
                                             } catch (_: Exception) {
                                                 Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
@@ -1778,7 +1765,11 @@ fun AppSettingsDialog(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(end = 8.dp)
+                                        ) {
                                             Text(
                                                 text = title,
                                                 color = if (isSelected) appColors.accentText else appColors.textPrimary,
@@ -1824,80 +1815,6 @@ fun AppSettingsDialog(
                                         )
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    // CARD 5: Kiến Trúc Engine V4
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(appColors.surfaceElevated)
-                                .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
-                                .padding(12.dp)
-                        ) {
-                            Column {
-                                Text(
-                                    text = strings.engineV4Title,
-                                    color = appColors.textPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = strings.engineFeatures,
-                                    color = appColors.textSecondary,
-                                    fontSize = 11.sp,
-                                    lineHeight = 16.sp
-                                )
-                            }
-                        }
-                    }
-
-                    // CARD 6: Trợ Giúp Quét APK & Play Protect
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(appColors.surfaceElevated)
-                                .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
-                                .clickable { onOpenPlayProtectHelp() }
-                                .padding(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Security,
-                                        contentDescription = null,
-                                        tint = appColors.accentText,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = strings.playProtectTitle,
-                                            color = appColors.textPrimary,
-                                            fontSize = 12.5.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Text(
-                                            text = strings.playProtectDesc,
-                                            color = appColors.textMuted,
-                                            fontSize = 10.5.sp
-                                        )
-                                    }
-                                }
-                                Text(strings.viewGuide, color = appColors.accentText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -2046,7 +1963,11 @@ fun AdvancedThemeCustomizerDialog(
     var wallpaperBitmap by remember(wallpaperPath) {
         mutableStateOf<Bitmap?>(
             if (wallpaperPath != null && File(wallpaperPath!!).exists()) {
-                try { BitmapFactory.decodeFile(wallpaperPath) } catch (e: Exception) { null }
+                try {
+                    BitmapFactory.decodeFile(wallpaperPath)
+                } catch (_: Exception) {
+                    null
+                }
             } else null
         )
     }
@@ -2144,7 +2065,11 @@ fun AdvancedThemeCustomizerDialog(
                             .fillMaxWidth()
                             .height(130.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .border(1.dp, appColors.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                            .border(
+                                1.dp,
+                                appColors.accent.copy(alpha = 0.5f),
+                                RoundedCornerShape(12.dp)
+                            )
                     ) {
                         Image(
                             bitmap = wallpaperBitmap!!.asImageBitmap(),
@@ -2287,7 +2212,7 @@ fun AdvancedThemeCustomizerDialog(
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     presetColors.forEach { hex ->
-                        val col = Color(android.graphics.Color.parseColor(hex))
+                        val col = Color(hex.toColorInt())
                         val isChosen = selectedAccentHex.equals(hex, ignoreCase = true)
                         Box(
                             modifier = Modifier
@@ -2514,11 +2439,8 @@ fun LiveLogDialog(
                         items(logs) { line ->
                             val color = when {
                                 line.startsWith("[START]") -> appColors.accentText
+                                line.startsWith("[PROCESS]") -> Color(0xFF4FC3F7)
                                 line.startsWith("[ERROR]") -> appColors.danger
-                                line.startsWith("[EXPLOIT 1]") || line.startsWith("[EXPLOIT 2]") || line.startsWith("[EXPLOIT 3]") -> Color(0xFFE040FB)
-                                line.startsWith("[CLEAN]") || line.startsWith("[LÀM SẠCH]") -> Color(0xFF64B5F6)
-                                line.startsWith("[FASTSTART]") -> Color(0xFFFFD54F)
-                                line.startsWith("[STREAM]") -> Color(0xFF4FC3F7)
                                 line.startsWith("[SUCCESS]") -> appColors.success
                                 else -> appColors.textSecondary
                             }
@@ -2917,8 +2839,43 @@ fun HistoryDetailDialog(
     }
 }
 
+// Mở TikTok Studio trực tiếp bằng trình duyệt ngoài trên điện thoại
+fun openTikTokStudioInBrowser(context: Context, strings: AppStringsData) {
+    val studioUrl = "https://www.tiktok.com/tiktokstudio/upload"
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, studioUrl.toUri()).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        Toast.makeText(context, strings.openBrowserError, Toast.LENGTH_SHORT).show()
+    }
+}
+
+// Dọn dẹp các tệp tạm cũ từ các phiên trước
+fun cleanLegacyTempFiles(context: Context) {
+    try {
+        context.cacheDir?.listFiles()?.forEach { file ->
+            if (file.name.contains("webview", ignoreCase = true) ||
+                file.name.contains("chromium", ignoreCase = true) ||
+                file.name.endsWith(".tmp") ||
+                file.name.startsWith("temp_")
+            ) {
+                file.deleteRecursively()
+            }
+        }
+        val appWebviewDir = File(context.dataDir, "app_webview")
+        if (appWebviewDir.exists() && appWebviewDir.isDirectory) {
+            appWebviewDir.deleteRecursively()
+        }
+    } catch (_: Exception) {
+    }
+}
+
 // Phát chính xác video của record (tránh phát nhầm video khác)
 fun playSpecificVideo(context: Context, record: CompressedVideoRecord) {
+    val lang = LanguagePreferences.getLanguage(context)
+    val strings = AppStrings.forLanguage(lang)
     val targetUri = resolveVideoUri(context, record)
     if (targetUri != null) {
         val playIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -2927,20 +2884,23 @@ fun playSpecificVideo(context: Context, record: CompressedVideoRecord) {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
-            val chooser = Intent.createChooser(playIntent, "Phát video: ${record.displayName}")
+            val chooser = Intent.createChooser(
+                playIntent,
+                String.format(strings.playVideoChooser, record.displayName)
+            )
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             try {
                 context.startActivity(playIntent)
-            } catch (e2: Exception) {
-                Toast.makeText(context, "Không tìm thấy trình phát video phù hợp", Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {
+                Toast.makeText(context, strings.noVideoPlayerFound, Toast.LENGTH_SHORT).show()
             }
         }
     } else {
         Toast.makeText(
             context,
-            "Không tìm thấy file '${record.displayName}' trên thiết bị. File có thể đã bị di chuyển hoặc xóa.",
+            String.format(strings.videoFileNotFound, record.displayName),
             Toast.LENGTH_LONG
         ).show()
     }
@@ -2953,7 +2913,7 @@ fun resolveVideoUri(context: Context, record: CompressedVideoRecord): Uri? {
     // 1. Kiểm tra trực tiếp contentUri đã lưu sẵn trong record
     if (!record.contentUri.isNullOrBlank()) {
         try {
-            val directUri = Uri.parse(record.contentUri)
+            val directUri = record.contentUri.toUri()
             resolver.openInputStream(directUri)?.use {
                 return directUri
             }
@@ -3063,8 +3023,8 @@ suspend fun extractVideoMetadata(context: Context, uri: Uri): VideoMetadata = wi
         retriever.release()
     }
 
-    val sizeMb = String.format("%.2f", sizeBytes / (1024.0 * 1024.0))
-    val durationSec = String.format("%.1f", durationMs / 1000.0)
+    val sizeMb = String.format(Locale.US, "%.2f", sizeBytes / (1024.0 * 1024.0))
+    val durationSec = String.format(Locale.US, "%.1f", durationMs / 1000.0)
 
     VideoMetadata(
         uri = uri,
@@ -3077,16 +3037,23 @@ suspend fun extractVideoMetadata(context: Context, uri: Uri): VideoMetadata = wi
     )
 }
 
-// Xử lý tối ưu video V4 và lưu lịch sử
+// Xử lý tối ưu video và lưu lịch sử (log ngắn gọn, không lộ chi tiết kỹ thuật)
 suspend fun processAndOptimizeVideo(
     context: Context,
     media: VideoMetadata,
     historyIndex: Int,
+    language: AppLanguage = LanguagePreferences.getLanguage(context),
     onLog: (String) -> Unit
 ): CompressedVideoRecord? = withContext(Dispatchers.IO) {
+    val startTime = System.currentTimeMillis()
+    val isEn = (language == AppLanguage.EN)
     val tempIn = File(context.cacheDir, "temp_input.mp4")
     val tempOut = File(context.cacheDir, "temp_optimized.mp4")
-    val logsCollector = mutableListOf<String>()
+    if (tempIn.exists()) tempIn.delete()
+    if (tempOut.exists()) tempOut.delete()
+
+    val initialLog = if (isEn) "[START] Reading video..." else "[START] Đang đọc video..."
+    val logsCollector = mutableListOf(initialLog)
 
     val mainHandler = Handler(Looper.getMainLooper())
     fun appendLog(msg: String) {
@@ -3097,25 +3064,32 @@ suspend fun processAndOptimizeVideo(
     }
 
     try {
-        appendLog("[CACHE] Đang sao chép video vào bộ nhớ đệm ứng dụng...")
         context.contentResolver.openInputStream(media.uri)?.use { input ->
-            FileOutputStream(tempIn).use { output ->
+            FileOutputStream(tempIn, false).use { output ->
                 input.copyTo(output)
             }
         }
-        appendLog("[CACHE] Đã sao chép xong (${String.format("%.2f", tempIn.length() / (1024.0 * 1024.0))} MB)")
+
+        appendLog(if (isEn) "[PROCESS] Optimizing video..." else "[PROCESS] Đang tối ưu video...")
 
         Mp4BypassOptimizer.optimize(
             inputFile = tempIn,
             outputFile = tempOut,
-            ghostMultiplier = 9,
-            onLog = { msg ->
-                appendLog(msg)
-            }
+            onLog = { /* Không ghi chi tiết kỹ thuật vào log hiển thị */ }
         )
 
-        val outFileName = media.name.removeSuffix(".mp4").removeSuffix(".mov") + "_v4.mp4"
-        appendLog("[MEDIASTORE] Lưu file vào thư mục Movies/RecompressBypass/$outFileName...")
+        val cleanBaseName = media.name
+            .removeSuffix(".mp4")
+            .removeSuffix(".mov")
+            .removeSuffix(".MP4")
+            .removeSuffix(".MOV")
+            .replace(
+                Regex(
+                    "_(haze|v3|v4|v4\\.5|v45|nova|opt|optimized).*$",
+                    RegexOption.IGNORE_CASE
+                ), ""
+            )
+        val outFileName = "${cleanBaseName}_opt.mp4"
 
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, outFileName)
@@ -3127,9 +3101,13 @@ suspend fun processAndOptimizeVideo(
         }
 
         val resolver = context.contentResolver
-        val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
         val itemUri = resolver.insert(collection, values)
-            ?: throw IllegalStateException("Không thể tạo mục MediaStore trong Movies/RecompressBypass")
+            ?: throw IllegalStateException(if (isEn) "Cannot save video to gallery." else "Không thể lưu video vào thư viện.")
 
         resolver.openOutputStream(itemUri)?.use { outStream ->
             tempOut.inputStream().use { inStream ->
@@ -3142,6 +3120,12 @@ suspend fun processAndOptimizeVideo(
             values.put(MediaStore.Video.Media.IS_PENDING, 0)
             resolver.update(itemUri, values, null, null)
         }
+
+        val elapsedMs = System.currentTimeMillis() - startTime
+        appendLog(
+            if (isEn) "[SUCCESS] Saved to gallery (${elapsedMs}ms)"
+            else "[SUCCESS] Đã lưu vào thư viện (${elapsedMs}ms)"
+        )
 
         val id = System.currentTimeMillis().toString()
         val displayName = HistoryRepository.generateDisplayName(historyIndex)
@@ -3156,7 +3140,11 @@ suspend fun processAndOptimizeVideo(
             displayName = displayName,
             originalName = media.name,
             originalSizeMb = media.sizeMb,
-            optimizedSizeMb = String.format("%.2f", tempOut.length() / (1024.0 * 1024.0)),
+            optimizedSizeMb = String.format(
+                Locale.US,
+                "%.2f",
+                tempOut.length() / (1024.0 * 1024.0)
+            ),
             resolution = media.resolution,
             durationSec = media.durationSec,
             timestamp = System.currentTimeMillis(),
@@ -3167,17 +3155,14 @@ suspend fun processAndOptimizeVideo(
         )
 
         HistoryRepository.saveRecord(context, record)
-        appendLog("[HISTORY] Đã lưu thông tin video vào lịch sử dự án!")
         record
-    } catch (e: Throwable) {
-        val errTitle = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
-        appendLog("[ERROR] Lỗi xử lý (${e.javaClass.simpleName}): $errTitle")
-        val sw = java.io.StringWriter()
-        e.printStackTrace(java.io.PrintWriter(sw))
-        val stackLines = sw.toString().lines().filter { it.isNotBlank() }.take(5)
-        for (st in stackLines) {
-            appendLog("   $st")
+    } catch (_: Throwable) {
+        val cleanErr = if (isEn) {
+            "Unable to optimize this video file."
+        } else {
+            "Không thể tối ưu file video này."
         }
+        appendLog("[ERROR] $cleanErr")
         null
     } finally {
         tempIn.delete()
@@ -3185,23 +3170,30 @@ suspend fun processAndOptimizeVideo(
     }
 }
 
-// ================= MODAL CẬP NHẬT GITHUB RELEASE =================
+// ================= MODAL CẬP NHẬT BẮT BUỘC GITHUB RELEASE =================
 @Composable
 fun AppUpdateDialog(
     updateInfo: AppUpdateInfo,
     strings: AppStringsData,
+    isForceUpdate: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val appColors = LocalAppColors.current
+    val currentLanguage = LocalAppLanguage.current
     var isDownloading by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableIntStateOf(0) }
     var downloadError by remember { mutableStateOf<String?>(null) }
 
+    val canDismiss = !isDownloading && !isForceUpdate
+
     Dialog(
-        onDismissRequest = { if (!isDownloading) onDismiss() },
-        properties = DialogProperties(dismissOnBackPress = !isDownloading, dismissOnClickOutside = !isDownloading)
+        onDismissRequest = { if (canDismiss) onDismiss() },
+        properties = DialogProperties(
+            dismissOnBackPress = canDismiss,
+            dismissOnClickOutside = canDismiss
+        )
     ) {
         Box(
             modifier = Modifier
@@ -3248,7 +3240,7 @@ fun AppUpdateDialog(
                         }
                     }
 
-                    if (!isDownloading) {
+                    if (canDismiss) {
                         IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Close,
@@ -3259,7 +3251,21 @@ fun AppUpdateDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = if (currentLanguage == AppLanguage.EN) {
+                        "Please update to the latest version to continue with the best optimization experience."
+                    } else {
+                        "Vui lòng cập nhật lên phiên bản mới nhất để tiếp tục sử dụng với trải nghiệm tối ưu tốt nhất."
+                    },
+                    color = appColors.warning,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
                     text = strings.updateReleaseNotes,
@@ -3280,7 +3286,7 @@ fun AppUpdateDialog(
                     LazyColumn {
                         item {
                             Text(
-                                text = updateInfo.changelog,
+                                text = updateInfo.getLocalizedChangelog(currentLanguage),
                                 color = appColors.textSecondary,
                                 fontSize = 11.5.sp,
                                 lineHeight = 16.sp
@@ -3339,16 +3345,46 @@ fun AppUpdateDialog(
                             .height(44.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textPrimary),
-                            border = BorderStroke(1.dp, appColors.border)
-                        ) {
-                            Text(strings.updateLater, fontSize = 12.5.sp)
+                        if (canDismiss) {
+                            OutlinedButton(
+                                onClick = onDismiss,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textPrimary),
+                                border = BorderStroke(1.dp, appColors.border)
+                            ) {
+                                Text(strings.updateLater, fontSize = 12.5.sp)
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        val intent = Intent(
+                                            Intent.ACTION_VIEW,
+                                            UpdateManager.GITHUB_RELEASES_URL.toUri()
+                                        ).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {
+                                        Toast.makeText(
+                                            context,
+                                            strings.openBrowserError,
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textPrimary),
+                                border = BorderStroke(1.dp, appColors.border)
+                            ) {
+                                Text(strings.openGithub, fontSize = 12.sp)
+                            }
                         }
 
                         Button(
@@ -3362,7 +3398,7 @@ fun AppUpdateDialog(
                                     isDownloading = false
                                     if (file != null && file.exists()) {
                                         UpdateManager.installApk(context, file)
-                                        onDismiss()
+                                        if (canDismiss) onDismiss()
                                     } else {
                                         downloadError = strings.updateError
                                     }
@@ -3382,122 +3418,6 @@ fun AppUpdateDialog(
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-// ================= MODAL HƯỚNG DẪN TẮT CẢNH BÁO QUÉT PLAY PROTECT =================
-@Composable
-fun PlayProtectHelpDialog(
-    strings: AppStringsData,
-    onDismiss: () -> Unit
-) {
-    val appColors = LocalAppColors.current
-
-    Dialog(onDismissRequest = onDismiss) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
-                .border(1.dp, appColors.border, RoundedCornerShape(22.dp))
-                .padding(20.dp)
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(appColors.accentSoft),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = null,
-                                tint = appColors.accent,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = strings.playProtectDialogTitle,
-                            color = appColors.textPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = strings.close, tint = appColors.textMuted)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 300.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(appColors.surfaceInput)
-                        .padding(12.dp)
-                ) {
-                    LazyColumn {
-                        item {
-                            Text(
-                                text = strings.playProtectWhyTitle,
-                                color = appColors.accentText,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = strings.playProtectWhyContent,
-                                color = appColors.textSecondary,
-                                fontSize = 11.5.sp,
-                                lineHeight = 16.sp
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Text(
-                                text = strings.playProtectHowTitle,
-                                color = appColors.success,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Text(
-                                text = strings.playProtectHowContent,
-                                color = appColors.textMuted,
-                                fontSize = 11.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = appColors.surfaceElevated),
-                    border = BorderStroke(1.dp, appColors.border)
-                ) {
-                    Text(strings.playProtectGotIt, color = appColors.textPrimary, fontSize = 13.sp)
                 }
             }
         }

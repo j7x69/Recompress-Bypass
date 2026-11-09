@@ -1,35 +1,34 @@
 package com.recompress.bypass
 
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.roundToLong
 
-/**
- * MP4 Quality Bypass Optimizer (Video Quality & Social Media Container Engine)
- *
- * Key Optimization Vectors:
- * 1. 64-bit Indeterminate Duration normalization.
- * 2. Secondary Audio Stream sample synchronization.
- * 3. Clean Container Normalization (Dropping toxic tmcd & tref atoms, scaling timescales to 1000 Hz).
- * 4. ByteDance Internal Ingest Tag (te_is_reencode = 1, Lavf63.7.100).
- * 5. FastStart Container Layout (ftyp -> moov -> free -> mdat).
- * 6. Metadata Sanitizer & Container Cleaner.
- */
 object Mp4BypassOptimizer {
 
-    private const val CHUNK_SIZE = 16 * 1024 * 1024 // 16 MB streaming buffer
-    private const val DEFAULT_GHOST_MULTIPLIER = 9
+    private const val CHUNK_SIZE = 16 * 1024 * 1024
+    private const val MAX_MOOV_SIZE = 256L * 1024L * 1024L
 
-    private val CLEAN_FREE = byteArrayOf(
+    private const val MASK_KEY = 0x5A
+    private val MASKED_FRAME = intArrayOf(0x7B, 0x4A, 0x5E, 0x3A, 0xD6, 0x46)
+    private val MASKED_CFG_TAIL = intArrayOf(0x1A, 0x5A, 0x7A, 0x5A)
+
+    val AAC_SILENT_FRAME: ByteArray
+        get() = ByteArray(MASKED_FRAME.size) { i -> (MASKED_FRAME[i] xor MASK_KEY).toByte() }
+
+    const val CHUNK1_SAMPLES = 9
+    const val CHUNK2_SAMPLES = 8
+    const val ADDED_SAMPLES = CHUNK1_SAMPLES + CHUNK2_SAMPLES
+    const val AAC_FRAME_DURATION = 1024L
+
+    const val PROJECT_UDTA_TEXT = "Recompress Bypass https://github.com/j7x69/Recompress-Bypass"
+
+    private val FREE_BOX = byteArrayOf(
         0x00, 0x00, 0x00, 0x08,
         'f'.code.toByte(), 'r'.code.toByte(), 'e'.code.toByte(), 'e'.code.toByte()
-    )
-
-    private val DUMMY_AUDIO_PACKET = byteArrayOf(
-        0x00, 0x00, 0x00, 0x04,
-        0x00, 0x00, 0x00, 0x00
     )
 
     private val WATERMARK_SIGNATURES = listOf(
@@ -42,7 +41,8 @@ object Mp4BypassOptimizer {
         "nova normal"
     )
 
-    data class MP4Box(
+    @Suppress("unused")
+    class MP4Box(
         val type: String,
         val pos: Int,
         val size: Long,
@@ -51,7 +51,8 @@ object Mp4BypassOptimizer {
         val payload: ByteArray
     )
 
-    data class FileBoxHeader(
+    @Suppress("unused")
+    class FileBoxHeader(
         val type: String,
         val pos: Long,
         val size: Long,
@@ -63,102 +64,125 @@ object Mp4BypassOptimizer {
         return WATERMARK_SIGNATURES.any { str.contains(it) }
     }
 
-    /**
-     * Rebuilds iTunes/QuickTime udta.meta.ilst with ByteDance internal ingest tag
-     * (te_is_reencode = 1) and encoder tag (Lavf63.7.100).
-     */
-    fun buildCleanBytedanceUdta(): ByteArray {
+    fun makeSlSrPceAsc(sfIdx: Int = 3): ByteArray {
+        val sf = sfIdx and 0x0F
+        val b0 = ((2 shl 3) or (sf shr 1)).toByte()
+        val b1 = ((sf and 1) shl 7).toByte()
+        val b2 = (0x04 or ((sf shr 2) and 0x03)).toByte()
+        val b3 = ((sf and 0x03) shl 6).toByte()
+        return byteArrayOf(
+            b0,
+            b1,
+            b2,
+            b3,
+            (MASKED_CFG_TAIL[0] xor MASK_KEY).toByte(),
+            (MASKED_CFG_TAIL[1] xor MASK_KEY).toByte(),
+            (MASKED_CFG_TAIL[2] xor MASK_KEY).toByte(),
+            (MASKED_CFG_TAIL[3] xor MASK_KEY).toByte()
+        )
+    }
+
+    fun buildCleanProjectUdta(): ByteArray {
+        if (RustCoreBridge.isNativeAvailable) {
+            return RustCoreBridge.nativeBuildUdtaV45()
+        }
+        val tagBytes = PROJECT_UDTA_TEXT.toByteArray(Charsets.ISO_8859_1)
         val hdlrPayload = ByteBuffer.allocate(25).order(ByteOrder.BIG_ENDIAN)
-            .putInt(0) // version & flags
+            .putInt(0)
             .put(byteArrayOf(0, 0, 0, 0))
             .put("mdir".toByteArray(Charsets.ISO_8859_1))
             .put(ByteArray(13))
             .array()
-        val hdlrBox = rebuildBox("hdlr", hdlrPayload)
+        val hdlrBox = packBox("hdlr", hdlrPayload)
 
-        val tooDataPayload = ByteBuffer.allocate(8 + "Lavf63.7.100".length).order(ByteOrder.BIG_ENDIAN)
-            .putInt(1) // type indicator = 1 (text)
-            .putInt(0) // locale = 0
-            .put("Lavf63.7.100".toByteArray(Charsets.ISO_8859_1))
-            .array()
-        val tooBox = rebuildBox("\u00a9too", rebuildBox("data", tooDataPayload))
-
-        // ByteDance internal ingest passthrough tag: te_is_reencode = 1
-        val meanPayload = ByteBuffer.allocate(4 + "com.apple.quicktime.video".length).order(ByteOrder.BIG_ENDIAN)
-            .putInt(0)
-            .put("com.apple.quicktime.video".toByteArray(Charsets.ISO_8859_1))
-            .array()
-        val meanBox = rebuildBox("mean", meanPayload)
-
-        val namePayload = ByteBuffer.allocate(4 + "te_is_reencode".length).order(ByteOrder.BIG_ENDIAN)
-            .putInt(0)
-            .put("te_is_reencode".toByteArray(Charsets.ISO_8859_1))
-            .array()
-        val nameBox = rebuildBox("name", namePayload)
-
-        val reencodeDataPayload = ByteBuffer.allocate(8 + 1).order(ByteOrder.BIG_ENDIAN)
+        val dataPayload = ByteBuffer.allocate(8 + tagBytes.size).order(ByteOrder.BIG_ENDIAN)
             .putInt(1)
             .putInt(0)
-            .put("1".toByteArray(Charsets.ISO_8859_1))
+            .put(tagBytes)
             .array()
-        val dataBox = rebuildBox("data", reencodeDataPayload)
+        val dataBox = packBox("data", dataPayload)
+        val tooBox = packBox("\u00a9too", dataBox)
+        val ilstBox = packBox("ilst", tooBox)
 
-        val reencodeBox = rebuildBox("----", concatByteArrays(listOf(meanBox, nameBox, dataBox)))
-        val ilstBox = rebuildBox("ilst", concatByteArrays(listOf(tooBox, reencodeBox)))
-
-        val metaPayload = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
+        val metaPayload =
+            ByteBuffer.allocate(4 + hdlrBox.size + ilstBox.size).order(ByteOrder.BIG_ENDIAN)
             .putInt(0)
-            .array() + concatByteArrays(listOf(hdlrBox, ilstBox))
-        val metaBox = rebuildBox("meta", metaPayload)
-
-        return rebuildBox("udta", metaBox)
+                .put(hdlrBox)
+                .put(ilstBox)
+                .array()
+        val metaBox = packBox("meta", metaPayload)
+        return packBox("udta", metaBox)
     }
+
+    fun buildCleanBytedanceUdta(): ByteArray = buildCleanProjectUdta()
 
     fun optimize(
         inputFile: File,
         outputFile: File,
-        ghostMultiplier: Int = DEFAULT_GHOST_MULTIPLIER,
         onLog: (String) -> Unit = {}
     ) {
-        val startTime = System.currentTimeMillis()
-        if (!inputFile.exists()) {
-            throw IllegalArgumentException("Không tìm thấy file đầu vào: ${inputFile.absolutePath}")
+        if (!inputFile.exists() || !inputFile.isFile) {
+            throw IllegalArgumentException("Input video file not found.")
         }
+        if (inputFile.canonicalPath == outputFile.canonicalPath) {
+            throw IllegalArgumentException("Input and output paths must be different.")
+        }
+
+        // Xóa sạch file đầu ra cũ (nếu tồn tại) để không bao giờ bị ghi đè lỗi
+        if (outputFile.exists()) {
+            outputFile.delete()
+        }
+
+        if (RustCoreBridge.isNativeAvailable) {
+            RustCoreBridge.optimizeMp4WithRust(inputFile, outputFile, onLog)
+            return
+        }
+
+        optimizeJvmFallbackV45(inputFile, outputFile, onLog)
+    }
+
+    private fun optimizeJvmFallbackV45(
+        inputFile: File,
+        outputFile: File,
+        onLog: (String) -> Unit
+    ) {
         val fileSize = inputFile.length()
-        onLog("[*] Bắt đầu tối ưu V4: ${inputFile.name} (${String.format("%.2f", fileSize / (1024.0 * 1024.0))} MB)")
+        if (fileSize < 32L) {
+            throw IllegalStateException("Video file is too small or corrupted.")
+        }
+
+        onLog("[PROCESS]")
 
         var ftypData: ByteArray? = null
         var moovData: ByteArray? = null
-        var moovBoxHdrLen = 8
-        var mdatBoxInfo: FileBoxHeader? = null
+        var moovHdrLen = 8
+        var mdatInfo: FileBoxHeader? = null
 
         RandomAccessFile(inputFile, "r").use { raf ->
             var pos = 0L
             val hdr = ByteArray(8)
             val extHdr = ByteArray(8)
 
-            while (pos < fileSize) {
+            while (pos + 8 <= fileSize) {
                 raf.seek(pos)
-                val readHdr = raf.read(hdr)
-                if (readHdr < 8) break
+                if (raf.read(hdr) < 8) break
 
                 val btype = String(hdr, 4, 4, Charsets.ISO_8859_1)
-                val bufHdr = ByteBuffer.wrap(hdr).order(ByteOrder.BIG_ENDIAN)
-                var size = bufHdr.int.toLong() and 0xFFFFFFFFL
+                var size = ByteBuffer.wrap(hdr, 0, 4)
+                    .order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xFFFFFFFFL
                 var hdrLen = 8
 
                 if (size == 1L) {
-                    val readExt = raf.read(extHdr)
-                    if (readExt < 8) break
-                    val bufExt = ByteBuffer.wrap(extHdr).order(ByteOrder.BIG_ENDIAN)
-                    size = bufExt.long
+                    if (pos + 16 > fileSize) break
+                    if (raf.read(extHdr) < 8) break
+                    size = ByteBuffer.wrap(extHdr).order(ByteOrder.BIG_ENDIAN).long
                     hdrLen = 16
                 } else if (size == 0L) {
                     size = fileSize - pos
                 }
 
-                if (size < hdrLen) {
-                    throw IllegalStateException("Atom '$btype' bị hỏng tại offset $pos.")
+                if (size < hdrLen || pos + size > fileSize) {
+                    throw IllegalStateException("Corrupted MP4 container structure.")
                 }
 
                 if (btype == "ftyp" && ftypData == null) {
@@ -167,659 +191,682 @@ object Mp4BypassOptimizer {
                     raf.readFully(arr)
                     ftypData = arr
                 } else if (btype == "moov" && moovData == null) {
+                    if (size > MAX_MOOV_SIZE) {
+                        throw IllegalStateException("Video metadata exceeds memory safety limit.")
+                    }
                     raf.seek(pos)
                     val arr = ByteArray(size.toInt())
                     raf.readFully(arr)
                     moovData = arr
-                    moovBoxHdrLen = hdrLen
-                } else if (btype == "mdat" && mdatBoxInfo == null) {
-                    mdatBoxInfo = FileBoxHeader(btype, pos, size, hdrLen)
+                    moovHdrLen = hdrLen
+                } else if (btype == "mdat" && mdatInfo == null) {
+                    mdatInfo = FileBoxHeader(btype, pos, size, hdrLen)
                 }
 
                 pos += size
             }
         }
 
-        if (ftypData == null || moovData == null || mdatBoxInfo == null) {
-            throw IllegalStateException("File MP4 không hợp lệ: Thiếu atom moov, mdat hoặc ftyp.")
-        }
+        val ftyp = ftypData ?: throw IllegalStateException("Invalid MP4 file format.")
+        val moov = moovData ?: throw IllegalStateException("Missing video metadata in MP4 file.")
+        val mdat = mdatInfo ?: throw IllegalStateException("Missing media stream in MP4 file.")
 
-        val moovBoxes = parseBoxes(moovData, moovBoxHdrLen, moovData.size)
+        val moovBoxes = parseBoxes(moov, moovHdrLen, moov.size)
         val mvhdBox = moovBoxes.find { it.type == "mvhd" }
-            ?: throw IllegalStateException("Không tìm thấy mvhd atom trong moov.")
+            ?: throw IllegalStateException("Invalid video header metadata.")
 
-        val mvhdVer = mvhdBox.payload[0].toInt() and 0xFF
-        val mvhdBuf = ByteBuffer.wrap(mvhdBox.payload).order(ByteOrder.BIG_ENDIAN)
-        val origMovieTs: Long = if (mvhdVer == 0) {
-            mvhdBuf.position(12)
-            mvhdBuf.int.toLong() and 0xFFFFFFFFL
+        val mvhdP = mvhdBox.payload.clone()
+        val mvhdVer = mvhdP[0].toInt() and 0xFF
+        val mvhdBuf = ByteBuffer.wrap(mvhdP).order(ByteOrder.BIG_ENDIAN)
+
+        val origMovieTs: Long
+        val origNextTid: Int
+        if (mvhdVer == 0) {
+            origMovieTs = (mvhdBuf.getInt(12).toLong() and 0xFFFFFFFFL).coerceAtLeast(1L)
+            origNextTid = mvhdBuf.getInt(96)
         } else {
-            mvhdBuf.position(20)
-            mvhdBuf.int.toLong() and 0xFFFFFFFFL
+            origMovieTs = (mvhdBuf.getInt(20).toLong() and 0xFFFFFFFFL).coerceAtLeast(1L)
+            origNextTid = mvhdBuf.getInt(108)
         }
-        val safeOrigMovieTs = if (origMovieTs <= 0L) 1000L else origMovieTs
 
-        // Phân loại track Video và Audio (loại bỏ tmcd và tref gây cấm đăng trên TikTok)
-        val traks = moovBoxes.filter { it.type == "trak" }
-        var videoTrak: MP4Box? = null
-        var audioTrak: MP4Box? = null
-        var videoCodec = "hvc1"
-
-        for (t in traks) {
-            val mdia = findInBox(t.data, 8, "mdia") ?: continue
-            val hdlr = findInBox(mdia.data, 8, "hdlr")
-            if (hdlr != null && hdlr.data.size >= 20) {
-                val subtype = String(hdlr.data, 16, 4, Charsets.ISO_8859_1)
-                if (subtype == "vide" && videoTrak == null) {
-                    videoTrak = t
-                    val minf = findInBox(mdia.data, 8, "minf")
-                    val stbl = if (minf != null) findInBox(minf.data, 8, "stbl") else null
-                    val stsd = if (stbl != null) findInBox(stbl.data, 8, "stsd") else null
-                    if (stsd != null && stsd.payload.size >= 16) {
-                        videoCodec = String(stsd.payload, 12, 4, Charsets.ISO_8859_1)
+        var audioTrakBox: MP4Box? = null
+        for (b in moovBoxes) {
+            if (b.type == "trak") {
+                val mdia = findInBox(b.data, 8, "mdia")
+                val hdlr = if (mdia != null) findInBox(mdia.data, 8, "hdlr") else null
+                if (hdlr != null && hdlr.data.size >= 20) {
+                    val subtype = String(hdlr.data, 16, 4, Charsets.ISO_8859_1)
+                    if (subtype == "soun") {
+                        audioTrakBox = b
+                        break
                     }
-                } else if (subtype == "soun" && audioTrak == null) {
-                    audioTrak = t
                 }
             }
         }
 
-        if (videoTrak == null) {
-            throw IllegalStateException("Không tìm thấy Video Track hợp lệ trong file MP4.")
+        val audioTrak = audioTrakBox
+            ?: throw IllegalStateException("Video must contain an audio track.")
+
+        val aTkhd = findInBox(audioTrak.data, 8, "tkhd")
+            ?: throw IllegalStateException("Invalid audio track header.")
+        val origAudioTkhdDur: Long = if ((aTkhd.payload[0].toInt() and 0xFF) == 0) {
+            ByteBuffer.wrap(aTkhd.payload).order(ByteOrder.BIG_ENDIAN).getInt(20)
+                .toLong() and 0xFFFFFFFFL
+        } else {
+            ByteBuffer.wrap(aTkhd.payload).order(ByteOrder.BIG_ENDIAN).getLong(28)
         }
 
-        val hasAudio = audioTrak != null
-        var origAudioSamples = 0
-        var audioTs = 48000L
-        var audioDur = 0L
-        var dummyCount = 0
-
-        if (hasAudio) {
-            val aMdia = findInBox(audioTrak!!.data, 8, "mdia")
-            val aMdhd = if (aMdia != null) findInBox(aMdia.data, 8, "mdhd") else null
-            if (aMdhd != null) {
-                val aVer = aMdhd.payload[0].toInt() and 0xFF
-                val aBuf = ByteBuffer.wrap(aMdhd.payload).order(ByteOrder.BIG_ENDIAN)
-                if (aVer == 0) {
-                    aBuf.position(12)
-                    audioTs = aBuf.int.toLong() and 0xFFFFFFFFL
-                    audioDur = aBuf.int.toLong() and 0xFFFFFFFFL
-                } else {
-                    aBuf.position(20)
-                    audioTs = aBuf.int.toLong() and 0xFFFFFFFFL
-                    audioDur = aBuf.long
-                }
-            }
-            if (audioTs <= 0L) audioTs = 48000L
-
-            val aMinf = if (aMdia != null) findInBox(aMdia.data, 8, "minf") else null
-            val aStbl = if (aMinf != null) findInBox(aMinf.data, 8, "stbl") else null
-            val aStsz = if (aStbl != null) findInBox(aStbl.data, 8, "stsz") else null
-            if (aStsz != null && aStsz.payload.size >= 12) {
-                origAudioSamples = ByteBuffer.wrap(aStsz.payload, 8, 4).order(ByteOrder.BIG_ENDIAN).int
-            }
-
-            dummyCount = origAudioSamples * ghostMultiplier
-            if (dummyCount <= 0) dummyCount = 5958
+        val aMdia = findInBox(audioTrak.data, 8, "mdia")
+            ?: throw IllegalStateException("Invalid audio media data.")
+        val aMdhd = findInBox(aMdia.data, 8, "mdhd")
+            ?: throw IllegalStateException("Invalid audio media header.")
+        val aMdhdBuf = ByteBuffer.wrap(aMdhd.payload).order(ByteOrder.BIG_ENDIAN)
+        val audioTs: Long
+        val origMdhdDur: Long
+        if ((aMdhd.payload[0].toInt() and 0xFF) == 0) {
+            audioTs = (aMdhdBuf.getInt(12).toLong() and 0xFFFFFFFFL).coerceAtLeast(1L)
+            origMdhdDur = aMdhdBuf.getInt(16).toLong() and 0xFFFFFFFFL
+        } else {
+            audioTs = (aMdhdBuf.getInt(20).toLong() and 0xFFFFFFFFL).coerceAtLeast(1L)
+            origMdhdDur = aMdhdBuf.getLong(24)
         }
 
-        // 1. EXPLOIT 1: Tràn thời lượng 64-bit Indeterminate Duration (0xFFFFFFFFFFFFFFFF)
-        val timescale = 1000
-        val nextTrackId = if (hasAudio) 4 else 2
-        val mvhdV1Buf = ByteBuffer.allocate(112).order(ByteOrder.BIG_ENDIAN)
-        mvhdV1Buf.put(1.toByte()) // version 1
-        mvhdV1Buf.put(byteArrayOf(0, 0, 0)) // flags
-        mvhdV1Buf.putLong(0L) // creation_time
-        mvhdV1Buf.putLong(0L) // mod_time
-        mvhdV1Buf.putInt(timescale) // timescale = 1000
-        mvhdV1Buf.putLong(-1L) // 0xFFFFFFFFFFFFFFFFL Indeterminate movie duration
-        mvhdV1Buf.put(byteArrayOf(0x00, 0x01, 0x00, 0x00)) // rate 1.0
-        mvhdV1Buf.put(byteArrayOf(0x01, 0x00)) // volume 1.0
-        mvhdV1Buf.put(ByteArray(10)) // reserved
-        // unity matrix 36 bytes
-        mvhdV1Buf.putInt(0x00010000)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0x00010000)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0)
-        mvhdV1Buf.putInt(0x40000000)
-        mvhdV1Buf.put(ByteArray(24)) // pre_defined
-        mvhdV1Buf.putInt(nextTrackId)
-        val newMvhd = rebuildBox("mvhd", mvhdV1Buf.array())
+        val aMinf = findInBox(aMdia.data, 8, "minf")
+            ?: throw IllegalStateException("Invalid audio stream info.")
+        val aStbl = findInBox(aMinf.data, 8, "stbl")
+            ?: throw IllegalStateException("Invalid audio sample table.")
+        findInBox(aStbl.data, 8, "stsz")
+            ?: throw IllegalStateException("Invalid audio sample sizes.")
+        val aStco = findInBox(aStbl.data, 8, "stco") ?: findInBox(aStbl.data, 8, "co64")
+        ?: throw IllegalStateException("Invalid audio chunk offsets.")
 
-        // 2. Prepare dummy audio payload for mdat
-        val dummyPayloadLen = if (hasAudio) dummyCount.toLong() * DUMMY_AUDIO_PACKET.size else 0L
-        val origMdatPayloadLen = mdatBoxInfo.size - mdatBoxInfo.headerLen
-        val newMdatPayloadLen = origMdatPayloadLen + dummyPayloadLen
+        val origChunks = ByteBuffer.wrap(aStco.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
 
-        val newMdatHeader: ByteArray = if (newMdatPayloadLen + 8 > 0xFFFFFFFFL) {
+        val addedMdhdUnits = ADDED_SAMPLES.toLong() * AAC_FRAME_DURATION // 17 * 1024 = 17408
+        val newMdhdDur = origMdhdDur + addedMdhdUnits
+        val newAudioDurMs =
+            (origAudioTkhdDur * 1000L + (addedMdhdUnits * 1000L * origMovieTs) / audioTs) / origMovieTs
+
+        if (mvhdVer == 0) {
+            mvhdBuf.putInt(12, 1000)
+            mvhdBuf.putInt(16, newAudioDurMs.toInt())
+            mvhdBuf.putInt(96, origNextTid + 1)
+        } else {
+            mvhdBuf.putInt(20, 1000)
+            mvhdBuf.putLong(24, newAudioDurMs)
+            mvhdBuf.putInt(108, origNextTid + 1)
+        }
+        val newMvhd = packBox("mvhd", mvhdP)
+
+        val origMdatPayloadPos = mdat.pos + mdat.headerLen
+        val origMdatPayloadLen = mdat.size - mdat.headerLen
+
+        val mdat1Hdr: ByteArray = if (origMdatPayloadLen + 8L > 0xFFFFFFFFL) {
             ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
                 .putInt(1)
                 .put("mdat".toByteArray(Charsets.ISO_8859_1))
-                .putLong(newMdatPayloadLen + 16)
+                .putLong(origMdatPayloadLen + 16L)
                 .array()
         } else {
             ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-                .putInt((newMdatPayloadLen + 8).toInt())
+                .putInt((origMdatPayloadLen + 8L).toInt())
                 .put("mdat".toByteArray(Charsets.ISO_8859_1))
                 .array()
         }
 
-        onLog("[*] Video Codec: ${videoCodec.uppercase()}")
-        onLog("[!] BẬT EXPLOIT 1: Tràn thời lượng 64-bit (0xFFFFFFFFFFFFFFFF).")
-        if (hasAudio) {
-            onLog("[!] BẬT EXPLOIT 2: Ghost Audio Stream (Track #3 + $dummyCount dummy packets, 10x samples).")
+        val newMdat1Pos = ftyp.size.toLong() + FREE_BOX.size
+        val newMdat1PayloadPos = newMdat1Pos + mdat1Hdr.size
+        val shiftAmount = newMdat1PayloadPos - origMdatPayloadPos
+
+        val mdat2Pos = newMdat1PayloadPos + origMdatPayloadLen
+        val mdat2PayloadPos = mdat2Pos + 8L
+        val mdat2Payload = ByteArray(ADDED_SAMPLES * AAC_SILENT_FRAME.size)
+        for (i in 0 until ADDED_SAMPLES) {
+            System.arraycopy(
+                AAC_SILENT_FRAME,
+                0,
+                mdat2Payload,
+                i * AAC_SILENT_FRAME.size,
+                AAC_SILENT_FRAME.size
+            )
         }
-        onLog("[!] BẬT EXPLOIT 3: Thẻ nội bộ ByteDance (te_is_reencode = 1, Lavf63.7.100).")
-        onLog("[!] BẬT CHỐNG LỖI: Loại bỏ hoàn toàn track tmcd rác và tref gây cấm đăng trên TikTok.")
-        onLog("[!] LÀM SẠCH CONTAINER: Tẩy sạch siêu dữ liệu rác và thông tin thừa.")
+        val mdat2Box = packBox("mdat", mdat2Payload)
 
-        fun buildVideoTrak(shiftAmount: Long): ByteArray {
-            val subBoxes = parseBoxes(videoTrak.data, 8, videoTrak.data.size)
-            val newSub = mutableListOf<ByteArray>()
+        val newMoovChildren = mutableListOf<ByteArray>()
+        newMoovChildren.add(newMvhd)
+        var clonedAudioTrak: ByteArray? = null
 
-            for (b in subBoxes) {
-                val btype = b.type
-                if (btype == "udta" || btype == "meta") {
-                    if (isHazeOrWatermark(b.data)) continue
-                    newSub.add(b.data)
-                } else if (btype == "tref") {
-                    // Loại bỏ tref hoàn toàn để ngắt liên kết tới timecode track rác
-                    continue
-                } else if (btype == "tkhd") {
-                    val p = b.payload.clone()
-                    val ver = p[0].toInt() and 0xFF
-                    val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
-                    if (ver == 0) {
-                        buf.putInt(12, 1) // Track ID = 1
-                        val oldDur = buf.getInt(20).toLong() and 0xFFFFFFFFL
-                        val newDur = (oldDur.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong().toInt()
-                        buf.putInt(20, newDur)
+        for (b in moovBoxes) {
+            when (b.type) {
+                "mvhd" -> continue
+                "trak" -> {
+                    val mdia = findInBox(b.data, 8, "mdia")
+                    val hdlr = if (mdia != null) findInBox(mdia.data, 8, "hdlr") else null
+                    val subtype = if (hdlr != null && hdlr.data.size >= 20) {
+                        String(hdlr.data, 16, 4, Charsets.ISO_8859_1)
+                    } else ""
+
+                    if (subtype == "vide") {
+                        newMoovChildren.add(
+                            processVideoOrOtherTrak(
+                                b.data,
+                                origMovieTs,
+                                shiftAmount,
+                                isVideo = true
+                            )
+                        )
+                    } else if (subtype == "soun" && clonedAudioTrak == null) {
+                        val primaryAudio = processAudioTrak(
+                            trakData = b.data,
+                            origMovieTs = origMovieTs,
+                            shiftAmount = shiftAmount,
+                            mdat2PayloadPos = mdat2PayloadPos,
+                            newAudioDurMs = newAudioDurMs,
+                            newMdhdDur = newMdhdDur,
+                            audioTs = audioTs.toInt(),
+                            origChunks = origChunks,
+                            isPrimaryPoisoned = true,
+                            overrideTrackId = null
+                        )
+                        newMoovChildren.add(primaryAudio)
+
+                        clonedAudioTrak = processAudioTrak(
+                            trakData = b.data,
+                            origMovieTs = origMovieTs,
+                            shiftAmount = shiftAmount,
+                            mdat2PayloadPos = mdat2PayloadPos,
+                            newAudioDurMs = newAudioDurMs,
+                            newMdhdDur = newMdhdDur,
+                            audioTs = audioTs.toInt(),
+                            origChunks = origChunks,
+                            isPrimaryPoisoned = false,
+                            overrideTrackId = origNextTid
+                        )
                     } else {
-                        buf.putInt(20, 1) // Track ID = 1
-                        val oldDur = buf.getLong(28)
-                        val newDur = (oldDur.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong()
-                        buf.putLong(28, newDur)
+                        newMoovChildren.add(
+                            processVideoOrOtherTrak(
+                                b.data,
+                                origMovieTs,
+                                shiftAmount,
+                                isVideo = false
+                            )
+                        )
                     }
-                    newSub.add(rebuildBox("tkhd", p))
-                } else if (btype == "edts") {
-                    val elst = findInBox(b.data, 8, "elst")
-                    if (elst != null) {
-                        val elstP = elst.payload.clone()
-                        val elVer = elstP[0].toInt() and 0xFF
-                        val elBuf = ByteBuffer.wrap(elstP).order(ByteOrder.BIG_ENDIAN)
-                        val cnt = elBuf.getInt(4)
-                        for (i in 0 until cnt) {
-                            if (elVer == 0) {
-                                val offset = 8 + 12 * i
-                                val sd = elBuf.getInt(offset).toLong() and 0xFFFFFFFFL
-                                val newSd = (sd.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong().toInt()
-                                elBuf.putInt(offset, newSd)
-                            } else {
-                                val offset = 8 + 20 * i
-                                val sd = elBuf.getLong(offset)
-                                val newSd = (sd.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong()
-                                elBuf.putLong(offset, newSd)
-                            }
-                        }
-                        val newEdts = rebuildBox("edts", rebuildBox("elst", elstP))
-                        newSub.add(newEdts)
-                    } else {
-                        newSub.add(b.data)
+                }
+
+                "udta" -> {
+                    clonedAudioTrak?.let {
+                        newMoovChildren.add(it)
+                        clonedAudioTrak = null
                     }
-                } else if (btype == "mdia") {
-                    val mdiaSub = parseBoxes(b.data, 8, b.data.size)
-                    val newMdia = mutableListOf<ByteArray>()
-                    for (mb in mdiaSub) {
-                        if (mb.type == "minf") {
-                            val minfSub = parseBoxes(mb.data, 8, mb.data.size)
-                            val newMinf = mutableListOf<ByteArray>()
-                            for (mib in minfSub) {
-                                if (mib.type == "stbl") {
-                                    val stblSub = parseBoxes(mib.data, 8, mib.data.size)
-                                    val newStbl = mutableListOf<ByteArray>()
-                                    for (sb in stblSub) {
-                                        if (sb.type == "stco") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val offsets = LongArray(cnt)
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                            for (i in 0 until cnt) {
-                                                offsets[i] = (inBuf.int.toLong() and 0xFFFFFFFFL) + shiftAmount
-                                            }
-                                            if (offsets.any { it > 0xFFFFFFFFL }) {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putLong(o)
-                                                newStbl.add(rebuildBox("co64", outBuf.array()))
-                                            } else {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putInt(o.toInt())
-                                                newStbl.add(rebuildBox("stco", outBuf.array()))
-                                            }
-                                        } else if (sb.type == "co64") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(sb.payload, 0, 4)
-                                            outBuf.putInt(cnt)
-                                            for (i in 0 until cnt) {
-                                                outBuf.putLong(inBuf.long + shiftAmount)
-                                            }
-                                            newStbl.add(rebuildBox("co64", outBuf.array()))
-                                        } else if (sb.type == "stsd") {
-                                            // Xóa 32-byte compressor name trong visual sample entry
-                                            val stsdP = sb.payload.clone()
-                                            val entryStart = 8
-                                            if (stsdP.size >= entryStart + 78) {
-                                                val compOffset = entryStart + 50
-                                                for (ci in compOffset until compOffset + 32) {
-                                                    stsdP[ci] = 0
-                                                }
-                                            }
-                                            newStbl.add(rebuildBox("stsd", stsdP))
-                                        } else {
-                                            newStbl.add(sb.data)
-                                        }
-                                    }
-                                    newMinf.add(rebuildBox("stbl", concatByteArrays(newStbl)))
-                                } else {
-                                    newMinf.add(mib.data)
-                                }
-                            }
-                            newMdia.add(rebuildBox("minf", concatByteArrays(newMinf)))
-                        } else {
-                            newMdia.add(mb.data)
-                        }
+                    newMoovChildren.add(buildCleanProjectUdta())
+                }
+
+                else -> newMoovChildren.add(b.data)
+            }
+        }
+
+        clonedAudioTrak?.let { newMoovChildren.add(it) }
+        val finalMoov = packBox("moov", concatByteArrays(newMoovChildren))
+
+        BufferedOutputStream(FileOutputStream(outputFile, false), 1024 * 1024).use { out ->
+            out.write(ftyp)
+            out.write(FREE_BOX)
+            out.write(mdat1Hdr)
+
+            RandomAccessFile(inputFile, "r").use { inRaf ->
+                inRaf.seek(origMdatPayloadPos)
+                val buffer = ByteArray(CHUNK_SIZE)
+                var rem = origMdatPayloadLen
+                while (rem > 0) {
+                    val toRead = minOf(buffer.size.toLong(), rem).toInt()
+                    val read = inRaf.read(buffer, 0, toRead)
+                    if (read <= 0) {
+                        throw IllegalStateException("Unexpected end of input video file.")
                     }
-                    newSub.add(rebuildBox("mdia", concatByteArrays(newMdia)))
-                } else {
-                    newSub.add(b.data)
+                    out.write(buffer, 0, read)
+                    rem -= read
                 }
             }
-            return rebuildBox("trak", concatByteArrays(newSub))
+
+            out.write(mdat2Box)
+            out.write(finalMoov)
+            out.flush()
+        }
+    }
+
+    private fun buildV45AudioStsd(
+        origStsdPayload: ByteArray,
+        audioTs: Int
+    ): Pair<ByteArray, ByteArray> {
+        val entries = parseBoxes(origStsdPayload, 8, origStsdPayload.size)
+        if (entries.isEmpty() || entries[0].data.size < 36 || origStsdPayload.size < 8) {
+            val box = packBox("stsd", origStsdPayload)
+            return Pair(box, box)
         }
 
-        fun buildAudioTrak(shiftAmount: Long): ByteArray {
-            if (audioTrak == null) return ByteArray(0)
-            val subBoxes = parseBoxes(audioTrak.data, 8, audioTrak.data.size)
-            val newSub = mutableListOf<ByteArray>()
+        val entry1Raw = entries[0].data
+        val audioHeader28b = entry1Raw.copyOfRange(8, 36)
+        val subBoxes = parseBoxes(entry1Raw, 36, entry1Raw.size)
 
-            for (b in subBoxes) {
-                val btype = b.type
-                if (btype == "udta" || btype == "meta") {
-                    if (isHazeOrWatermark(b.data)) continue
-                    newSub.add(b.data)
-                } else if (btype == "tkhd") {
-                    val p = b.payload.clone()
-                    val ver = p[0].toInt() and 0xFF
-                    val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
-                    if (ver == 0) {
-                        buf.putInt(12, 2) // Track ID = 2
-                        val oldDur = buf.getInt(20).toLong() and 0xFFFFFFFFL
-                        val newDur = (oldDur.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong().toInt()
-                        buf.putInt(20, newDur)
-                    } else {
-                        buf.putInt(20, 2) // Track ID = 2
-                        val oldDur = buf.getLong(28)
-                        val newDur = (oldDur.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong()
-                        buf.putLong(28, newDur)
-                    }
-                    newSub.add(rebuildBox("tkhd", p))
-                } else if (btype == "edts") {
-                    val elst = findInBox(b.data, 8, "elst")
-                    if (elst != null) {
-                        val elstP = elst.payload.clone()
-                        val elVer = elstP[0].toInt() and 0xFF
-                        val elBuf = ByteBuffer.wrap(elstP).order(ByteOrder.BIG_ENDIAN)
-                        val cnt = elBuf.getInt(4)
-                        for (i in 0 until cnt) {
-                            if (elVer == 0) {
-                                val offset = 8 + 12 * i
-                                val sd = elBuf.getInt(offset).toLong() and 0xFFFFFFFFL
-                                val newSd = (sd.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong().toInt()
-                                elBuf.putInt(offset, newSd)
-                                elBuf.putInt(offset + 4, 0) // media_time = 0
-                            } else {
-                                val offset = 8 + 20 * i
-                                val sd = elBuf.getLong(offset)
-                                val newSd = (sd.toDouble() * 1000.0 / safeOrigMovieTs).roundToLong()
-                                elBuf.putLong(offset, newSd)
-                                elBuf.putLong(offset + 8, 0L) // media_time = 0
-                            }
-                        }
-                        val newEdts = rebuildBox("edts", rebuildBox("elst", elstP))
-                        newSub.add(newEdts)
-                    } else {
-                        newSub.add(b.data)
-                    }
-                } else if (btype == "mdia") {
-                    val mdiaSub = parseBoxes(b.data, 8, b.data.size)
-                    val newMdia = mutableListOf<ByteArray>()
-                    for (mb in mdiaSub) {
-                        if (mb.type == "minf") {
-                            val minfSub = parseBoxes(mb.data, 8, mb.data.size)
-                            val newMinf = mutableListOf<ByteArray>()
-                            for (mib in minfSub) {
-                                if (mib.type == "stbl") {
-                                    val stblSub = parseBoxes(mib.data, 8, mib.data.size)
-                                    val newStbl = mutableListOf<ByteArray>()
-                                    for (sb in stblSub) {
-                                        if (sb.type == "stco") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val offsets = LongArray(cnt)
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                            for (i in 0 until cnt) {
-                                                offsets[i] = (inBuf.int.toLong() and 0xFFFFFFFFL) + shiftAmount
-                                            }
-                                            if (offsets.any { it > 0xFFFFFFFFL }) {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putLong(o)
-                                                newStbl.add(rebuildBox("co64", outBuf.array()))
-                                            } else {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putInt(o.toInt())
-                                                newStbl.add(rebuildBox("stco", outBuf.array()))
-                                            }
-                                        } else if (sb.type == "co64") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(sb.payload, 0, 4)
-                                            outBuf.putInt(cnt)
-                                            for (i in 0 until cnt) {
-                                                outBuf.putLong(inBuf.long + shiftAmount)
-                                            }
-                                            newStbl.add(rebuildBox("co64", outBuf.array()))
-                                        } else {
-                                            newStbl.add(sb.data)
-                                        }
-                                    }
-                                    newMinf.add(rebuildBox("stbl", concatByteArrays(newStbl)))
-                                } else {
-                                    newMinf.add(mib.data)
-                                }
-                            }
-                            newMdia.add(rebuildBox("minf", concatByteArrays(newMinf)))
-                        } else {
-                            newMdia.add(mb.data)
-                        }
-                    }
-                    newSub.add(rebuildBox("mdia", concatByteArrays(newMdia)))
-                } else {
-                    newSub.add(b.data)
+        var maxBr = 294000
+        var avgBr = 2275
+        val sfMap = mapOf(
+            96000 to 0, 88200 to 1, 64000 to 2, 48000 to 3, 44100 to 4, 32000 to 5,
+            24000 to 6, 22050 to 7, 16000 to 8, 12000 to 9, 11025 to 10, 8000 to 11, 7350 to 12
+        )
+        var sfIdx = sfMap[audioTs] ?: 3
+
+        for (sb in subBoxes) {
+            if (sb.type == "btrt" && sb.payload.size >= 12) {
+                val buf = ByteBuffer.wrap(sb.payload).order(ByteOrder.BIG_ENDIAN)
+                maxBr = buf.getInt(4)
+                avgBr = buf.getInt(8)
+            } else if (sb.type == "esds") {
+                val p = sb.payload
+                val pos05 = indexOfSubArray(
+                    p,
+                    byteArrayOf(0x05, 0x80.toByte(), 0x80.toByte(), 0x80.toByte())
+                )
+                if (pos05 != -1 && pos05 + 7 <= p.size) {
+                    val a0 = p[pos05 + 5].toInt() and 0xFF
+                    val a1 = p[pos05 + 6].toInt() and 0xFF
+                    sfIdx = ((a0 and 0x07) shl 1) or (a1 shr 7)
                 }
             }
-            return rebuildBox("trak", concatByteArrays(newSub))
         }
 
-        fun buildGhostTrak(shiftAmount: Long): ByteArray {
-            if (audioTrak == null || dummyCount == 0) return ByteArray(0)
-            val subBoxes = parseBoxes(audioTrak.data, 8, audioTrak.data.size)
-            val newSub = mutableListOf<ByteArray>()
-            val newMdhdDur = audioDur + dummyCount
-            val ghostDurMs = (newMdhdDur.toDouble() / audioTs * 1000.0).roundToLong()
+        val pceAsc = makeSlSrPceAsc(sfIdx)
+        val esds2Payload = ByteBuffer.allocate(50).order(ByteOrder.BIG_ENDIAN)
+            .put(byteArrayOf(0x00, 0x00, 0x00, 0x00))
+            .put(byteArrayOf(0x03, 0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x28))
+            .put(byteArrayOf(0x00, 0x02, 0x00))
+            .put(byteArrayOf(0x04, 0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x1a))
+            .put(byteArrayOf(0x40, 0x15, 0x00, 0x00, 0x00))
+            .putInt(maxBr)
+            .putInt(avgBr)
+            .put(byteArrayOf(0x05, 0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x08))
+            .put(pceAsc)
+            .put(byteArrayOf(0x06, 0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x01, 0x02))
+            .array()
 
-            for (b in subBoxes) {
-                val btype = b.type
-                if (btype == "udta" || btype == "meta") {
-                    continue
-                } else if (btype == "tkhd") {
-                    val p = b.payload.clone()
-                    val ver = p[0].toInt() and 0xFF
-                    val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
-                    if (ver == 0) {
-                        buf.putInt(12, 3) // Ghost Track ID = 3
-                        buf.putInt(20, ghostDurMs.toInt())
-                    } else {
-                        buf.putInt(20, 3)
-                        buf.putLong(28, ghostDurMs)
+        val esds2Box = packBox("esds", esds2Payload)
+        val entry2Raw = packBox("mp4a", audioHeader28b + esds2Box)
+
+        val header4b = origStsdPayload.copyOfRange(0, 4)
+        val count2 = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(2).array()
+        val count1 = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(1).array()
+
+        val dualPayload = concatByteArrays(listOf(header4b, count2, entry1Raw, entry2Raw))
+        val singlePayload = concatByteArrays(listOf(header4b, count1, entry1Raw))
+
+        return Pair(packBox("stsd", dualPayload), packBox("stsd", singlePayload))
+    }
+
+    private fun shiftChunkOffsets(
+        sb: MP4Box,
+        shiftAmount: Long,
+        extraOffsets: LongArray = LongArray(0)
+    ): ByteArray {
+        val payload = sb.payload
+        val cnt = ByteBuffer.wrap(payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
+        val offsets = LongArray(cnt + extraOffsets.size)
+
+        if (sb.type == "stco") {
+            val inBuf = ByteBuffer.wrap(payload, 8, cnt * 4).order(ByteOrder.BIG_ENDIAN)
+            for (i in 0 until cnt) {
+                offsets[i] = (inBuf.int.toLong() and 0xFFFFFFFFL) + shiftAmount
+            }
+        } else {
+            val inBuf = ByteBuffer.wrap(payload, 8, cnt * 8).order(ByteOrder.BIG_ENDIAN)
+            for (i in 0 until cnt) {
+                offsets[i] = inBuf.long + shiftAmount
+            }
+        }
+
+        for (i in extraOffsets.indices) {
+            offsets[cnt + i] = extraOffsets[i]
+        }
+
+        return if (sb.type == "co64" || offsets.any { it > 0xFFFFFFFFL }) {
+            val outBuf = ByteBuffer.allocate(8 + offsets.size * 8).order(ByteOrder.BIG_ENDIAN)
+            outBuf.put(payload, 0, 4)
+            outBuf.putInt(offsets.size)
+            for (o in offsets) outBuf.putLong(o)
+            packBox("co64", outBuf.array())
+        } else {
+            val outBuf = ByteBuffer.allocate(8 + offsets.size * 4).order(ByteOrder.BIG_ENDIAN)
+            outBuf.put(payload, 0, 4)
+            outBuf.putInt(offsets.size)
+            for (o in offsets) outBuf.putInt(o.toInt())
+            packBox("stco", outBuf.array())
+        }
+    }
+
+    private fun rescaleTkhd(
+        tkhdPayload: ByteArray,
+        origMovieTs: Long,
+        newId: Int? = null,
+        overrideDur: Long? = null
+    ): ByteArray {
+        val p = tkhdPayload.clone()
+        val ver = p[0].toInt() and 0xFF
+        val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
+        if (ver == 0) {
+            if (newId != null) buf.putInt(12, newId)
+            val oldDur = buf.getInt(20).toLong() and 0xFFFFFFFFL
+            val newDur = overrideDur ?: ((oldDur * 1000L) / origMovieTs)
+            buf.putInt(20, newDur.toInt())
+        } else {
+            if (newId != null) buf.putInt(20, newId)
+            val oldDur = buf.getLong(28)
+            val newDur = overrideDur ?: ((oldDur * 1000L) / origMovieTs)
+            buf.putLong(28, newDur)
+        }
+        return packBox("tkhd", p)
+    }
+
+    private fun rescaleEdts(
+        edtsData: ByteArray,
+        origMovieTs: Long,
+        overrideDur: Long? = null
+    ): ByteArray {
+        val elst = findInBox(edtsData, 8, "elst") ?: return edtsData
+        val p = elst.payload.clone()
+        val ver = p[0].toInt() and 0xFF
+        val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
+        val cnt = buf.getInt(4)
+        for (i in 0 until cnt) {
+            if (ver == 0) {
+                val off = 8 + 12 * i
+                val sd = buf.getInt(off).toLong() and 0xFFFFFFFFL
+                val newSd = overrideDur ?: ((sd * 1000L) / origMovieTs)
+                buf.putInt(off, newSd.toInt())
+            } else {
+                val off = 8 + 20 * i
+                val sd = buf.getLong(off)
+                val newSd = overrideDur ?: ((sd * 1000L) / origMovieTs)
+                buf.putLong(off, newSd)
+            }
+        }
+        return packBox("edts", packBox("elst", p))
+    }
+
+    private fun processVideoOrOtherTrak(
+        trakData: ByteArray,
+        origMovieTs: Long,
+        shiftAmount: Long,
+        isVideo: Boolean
+    ): ByteArray {
+        val subBoxes = parseBoxes(trakData, 8, trakData.size)
+        val out = mutableListOf<ByteArray>()
+        for (b in subBoxes) {
+            when (b.type) {
+                "tkhd" -> out.add(rescaleTkhd(b.payload, origMovieTs))
+                "edts" -> out.add(rescaleEdts(b.data, origMovieTs))
+                "mdia" -> {
+                    val mdiaOut = mutableListOf<ByteArray>()
+                    for (mb in parseBoxes(b.data, 8, b.data.size)) {
+                        if (mb.type == "minf") {
+                            val minfOut = mutableListOf<ByteArray>()
+                            for (mib in parseBoxes(mb.data, 8, mb.data.size)) {
+                                if (mib.type == "stbl") {
+                                    val stblOut = mutableListOf<ByteArray>()
+                                    for (sb in parseBoxes(mib.data, 8, mib.data.size)) {
+                                        if (sb.type == "stco" || sb.type == "co64") {
+                                            stblOut.add(shiftChunkOffsets(sb, shiftAmount))
+                                        } else if (sb.type == "stsd" && isVideo) {
+                                            val stsdP = if (sb.payload.size in 86..89) {
+                                                sb.payload.copyOf(90)
+                                            } else {
+                                                sb.payload.clone()
+                                            }
+                                            if (stsdP.size >= 90) {
+                                                for (ci in 58 until 90) stsdP[ci] = 0
+                                            }
+                                            stblOut.add(packBox("stsd", stsdP))
+                                        } else {
+                                            stblOut.add(sb.data)
+                                        }
+                                    }
+                                    minfOut.add(packBox("stbl", concatByteArrays(stblOut)))
+                                } else {
+                                    minfOut.add(mib.data)
+                                }
+                            }
+                            mdiaOut.add(packBox("minf", concatByteArrays(minfOut)))
+                        } else {
+                            mdiaOut.add(mb.data)
+                        }
                     }
-                    newSub.add(rebuildBox("tkhd", p))
-                } else if (btype == "edts") {
-                    val elstPayload = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
-                        .put(0.toByte())
-                        .put(byteArrayOf(0, 0, 0))
-                        .putInt(1) // entry_count = 1
-                        .putInt(ghostDurMs.toInt()) // segment_duration
-                        .putInt(0) // media_time = 0
-                        .putInt(65536) // media_rate = 1.0 (0x00010000)
-                        .array()
-                    newSub.add(rebuildBox("edts", rebuildBox("elst", elstPayload)))
-                } else if (btype == "mdia") {
-                    val mdiaSub = parseBoxes(b.data, 8, b.data.size)
-                    val newMdia = mutableListOf<ByteArray>()
-                    for (mb in mdiaSub) {
+                    out.add(packBox("mdia", concatByteArrays(mdiaOut)))
+                }
+
+                else -> out.add(b.data)
+            }
+        }
+        return packBox("trak", concatByteArrays(out))
+    }
+
+    private fun processAudioTrak(
+        trakData: ByteArray,
+        origMovieTs: Long,
+        shiftAmount: Long,
+        mdat2PayloadPos: Long,
+        newAudioDurMs: Long,
+        newMdhdDur: Long,
+        audioTs: Int,
+        origChunks: Int,
+        isPrimaryPoisoned: Boolean,
+        overrideTrackId: Int?
+    ): ByteArray {
+        val subBoxes = parseBoxes(trakData, 8, trakData.size)
+        val out = mutableListOf<ByteArray>()
+        val extraChunkOffsets = longArrayOf(
+            mdat2PayloadPos,
+            mdat2PayloadPos + CHUNK1_SAMPLES.toLong() * AAC_SILENT_FRAME.size
+        )
+
+        for (b in subBoxes) {
+            when (b.type) {
+                "tkhd" -> out.add(
+                    rescaleTkhd(
+                        b.payload,
+                        origMovieTs,
+                        newId = overrideTrackId,
+                        overrideDur = newAudioDurMs
+                    )
+                )
+
+                "edts" -> out.add(rescaleEdts(b.data, origMovieTs, overrideDur = newAudioDurMs))
+                "mdia" -> {
+                    val mdiaOut = mutableListOf<ByteArray>()
+                    for (mb in parseBoxes(b.data, 8, b.data.size)) {
                         if (mb.type == "mdhd") {
-                            val p = mb.payload.clone()
-                            val ver = p[0].toInt() and 0xFF
-                            val buf = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
-                            if (ver == 0) {
+                            val mdhdP = mb.payload.clone()
+                            val buf = ByteBuffer.wrap(mdhdP).order(ByteOrder.BIG_ENDIAN)
+                            if ((mdhdP[0].toInt() and 0xFF) == 0) {
                                 buf.putInt(16, newMdhdDur.toInt())
                             } else {
                                 buf.putLong(24, newMdhdDur)
                             }
-                            newMdia.add(rebuildBox("mdhd", p))
+                            mdiaOut.add(packBox("mdhd", mdhdP))
                         } else if (mb.type == "minf") {
-                            val minfSub = parseBoxes(mb.data, 8, mb.data.size)
-                            val newMinf = mutableListOf<ByteArray>()
-                            for (mib in minfSub) {
+                            val minfOut = mutableListOf<ByteArray>()
+                            for (mib in parseBoxes(mb.data, 8, mb.data.size)) {
                                 if (mib.type == "stbl") {
-                                    val stblSub = parseBoxes(mib.data, 8, mib.data.size)
-                                    val newStbl = mutableListOf<ByteArray>()
-                                    for (sb in stblSub) {
-                                        if (sb.type == "stts") {
-                                            val p = sb.payload
-                                            val cnt = ByteBuffer.wrap(p, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val outBuf = ByteBuffer.allocate(8 + (cnt + 1) * 8).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(p, 0, 4)
-                                            outBuf.putInt(cnt + 1)
-                                            outBuf.put(p, 8, cnt * 8)
-                                            outBuf.putInt(dummyCount)
-                                            outBuf.putInt(1)
-                                            newStbl.add(rebuildBox("stts", outBuf.array()))
-                                        } else if (sb.type == "stsc") {
-                                            val p = sb.payload
-                                            val cnt = ByteBuffer.wrap(p, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val inBuf = ByteBuffer.wrap(p, 8, cnt * 12).order(ByteOrder.BIG_ENDIAN)
-                                            val outBuf = ByteBuffer.allocate(8 + cnt * 12).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(p, 0, 4)
-                                            outBuf.putInt(cnt)
-                                            for (i in 0 until cnt) {
-                                                val fc = inBuf.int
-                                                var spc = inBuf.int
-                                                val di = inBuf.int
-                                                if (i == cnt - 1) {
-                                                    spc += dummyCount
+                                    val stblOut = mutableListOf<ByteArray>()
+                                    for (sb in parseBoxes(mib.data, 8, mib.data.size)) {
+                                        when (sb.type) {
+                                            "stsd" -> {
+                                                val (dualBox, singleBox) = buildV45AudioStsd(
+                                                    sb.payload,
+                                                    audioTs
+                                                )
+                                                stblOut.add(if (isPrimaryPoisoned) dualBox else singleBox)
+                                            }
+
+                                            "stts" -> {
+                                                val p = sb.payload
+                                                val cnt = ByteBuffer.wrap(p, 4, 4)
+                                                    .order(ByteOrder.BIG_ENDIAN).int
+                                                val entries = mutableListOf<Pair<Int, Int>>()
+                                                val inBuf = ByteBuffer.wrap(p, 8, cnt * 8)
+                                                    .order(ByteOrder.BIG_ENDIAN)
+                                                repeat(cnt) {
+                                                    entries.add(Pair(inBuf.int, inBuf.int))
                                                 }
-                                                outBuf.putInt(fc)
-                                                outBuf.putInt(spc)
-                                                outBuf.putInt(di)
+                                                if (entries.isNotEmpty()) {
+                                                    val last = entries.last()
+                                                    entries[entries.lastIndex] = Pair(
+                                                        last.first + ADDED_SAMPLES,
+                                                        last.second
+                                                    )
+                                                } else {
+                                                    entries.add(
+                                                        Pair(
+                                                            ADDED_SAMPLES,
+                                                            AAC_FRAME_DURATION.toInt()
+                                                        )
+                                                    )
+                                                }
+                                                val outBuf =
+                                                    ByteBuffer.allocate(8 + entries.size * 8)
+                                                        .order(ByteOrder.BIG_ENDIAN)
+                                                outBuf.put(p, 0, 4)
+                                                outBuf.putInt(entries.size)
+                                                for ((sc, sd) in entries) {
+                                                    outBuf.putInt(sc)
+                                                    outBuf.putInt(sd)
+                                                }
+                                                stblOut.add(packBox("stts", outBuf.array()))
                                             }
-                                            newStbl.add(rebuildBox("stsc", outBuf.array()))
-                                        } else if (sb.type == "stsz") {
-                                            val p = sb.payload
-                                            val sampleSize = ByteBuffer.wrap(p, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val cnt = ByteBuffer.wrap(p, 8, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val totalCount = cnt + dummyCount
-                                            val outBuf = ByteBuffer.allocate(12 + totalCount * 4).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(p, 0, 4)
-                                            outBuf.putInt(0) // variable sample size
-                                            outBuf.putInt(totalCount)
-                                            if (sampleSize == 0) {
-                                                outBuf.put(p, 12, cnt * 4)
-                                            } else {
-                                                for (i in 0 until cnt) outBuf.putInt(sampleSize)
+
+                                            "stsc" -> {
+                                                val p = sb.payload
+                                                val cnt = ByteBuffer.wrap(p, 4, 4)
+                                                    .order(ByteOrder.BIG_ENDIAN).int
+                                                val outBuf = ByteBuffer.allocate(8 + (cnt + 2) * 12)
+                                                    .order(ByteOrder.BIG_ENDIAN)
+                                                outBuf.put(p, 0, 4)
+                                                outBuf.putInt(cnt + 2)
+                                                outBuf.put(p, 8, cnt * 12)
+                                                outBuf.putInt(origChunks + 1)
+                                                outBuf.putInt(CHUNK1_SAMPLES)
+                                                outBuf.putInt(1)
+                                                outBuf.putInt(origChunks + 2)
+                                                outBuf.putInt(CHUNK2_SAMPLES)
+                                                outBuf.putInt(if (isPrimaryPoisoned) 2 else 1)
+                                                stblOut.add(packBox("stsc", outBuf.array()))
                                             }
-                                            for (i in 0 until dummyCount) {
-                                                outBuf.putInt(8) // 8-byte dummy packet
+
+                                            "stsz" -> {
+                                                val p = sb.payload
+                                                val ss = ByteBuffer.wrap(p, 4, 4)
+                                                    .order(ByteOrder.BIG_ENDIAN).int
+                                                val cnt = ByteBuffer.wrap(p, 8, 4)
+                                                    .order(ByteOrder.BIG_ENDIAN).int
+                                                if (ss == 0) {
+                                                    val outBuf =
+                                                        ByteBuffer.allocate(12 + (cnt + ADDED_SAMPLES) * 4)
+                                                            .order(ByteOrder.BIG_ENDIAN)
+                                                    outBuf.put(p, 0, 8)
+                                                    outBuf.putInt(cnt + ADDED_SAMPLES)
+                                                    outBuf.put(p, 12, cnt * 4)
+                                                    repeat(ADDED_SAMPLES) {
+                                                        outBuf.putInt(AAC_SILENT_FRAME.size)
+                                                    }
+                                                    stblOut.add(packBox("stsz", outBuf.array()))
+                                                } else {
+                                                    val outBuf = ByteBuffer.allocate(12)
+                                                        .order(ByteOrder.BIG_ENDIAN)
+                                                    outBuf.put(p, 0, 8)
+                                                    outBuf.putInt(cnt + ADDED_SAMPLES)
+                                                    stblOut.add(packBox("stsz", outBuf.array()))
+                                                }
                                             }
-                                            newStbl.add(rebuildBox("stsz", outBuf.array()))
-                                        } else if (sb.type == "sbgp") {
-                                            val p = sb.payload.clone()
-                                            if (p.size >= 20) {
-                                                ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN).putInt(12, origAudioSamples + dummyCount)
+
+                                            "stco", "co64" -> {
+                                                stblOut.add(
+                                                    shiftChunkOffsets(
+                                                        sb,
+                                                        shiftAmount,
+                                                        extraChunkOffsets
+                                                    )
+                                                )
                                             }
-                                            newStbl.add(rebuildBox("sbgp", p))
-                                        } else if (sb.type == "stco") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val offsets = LongArray(cnt)
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                            for (i in 0 until cnt) {
-                                                offsets[i] = (inBuf.int.toLong() and 0xFFFFFFFFL) + shiftAmount
+
+                                            "sbgp" -> {
+                                                val p = sb.payload
+                                                val cnt = ByteBuffer.wrap(p, 8, 4)
+                                                    .order(ByteOrder.BIG_ENDIAN).int
+                                                val outBuf = ByteBuffer.allocate(12 + (cnt + 1) * 8)
+                                                    .order(ByteOrder.BIG_ENDIAN)
+                                                outBuf.put(p, 0, 8)
+                                                outBuf.putInt(cnt + 1)
+                                                outBuf.put(p, 12, cnt * 8)
+                                                outBuf.putInt(ADDED_SAMPLES)
+                                                outBuf.putInt(0)
+                                                stblOut.add(packBox("sbgp", outBuf.array()))
                                             }
-                                            if (offsets.any { it > 0xFFFFFFFFL }) {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putLong(o)
-                                                newStbl.add(rebuildBox("co64", outBuf.array()))
-                                            } else {
-                                                val outBuf = ByteBuffer.allocate(8 + cnt * 4).order(ByteOrder.BIG_ENDIAN)
-                                                outBuf.put(sb.payload, 0, 4)
-                                                outBuf.putInt(cnt)
-                                                for (o in offsets) outBuf.putInt(o.toInt())
-                                                newStbl.add(rebuildBox("stco", outBuf.array()))
-                                            }
-                                        } else if (sb.type == "co64") {
-                                            val cnt = ByteBuffer.wrap(sb.payload, 4, 4).order(ByteOrder.BIG_ENDIAN).int
-                                            val inBuf = ByteBuffer.wrap(sb.payload, 8, cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            val outBuf = ByteBuffer.allocate(8 + cnt * 8).order(ByteOrder.BIG_ENDIAN)
-                                            outBuf.put(sb.payload, 0, 4)
-                                            outBuf.putInt(cnt)
-                                            for (i in 0 until cnt) {
-                                                outBuf.putLong(inBuf.long + shiftAmount)
-                                            }
-                                            newStbl.add(rebuildBox("co64", outBuf.array()))
-                                        } else {
-                                            newStbl.add(sb.data)
+
+                                            else -> stblOut.add(sb.data)
                                         }
                                     }
-                                    newMinf.add(rebuildBox("stbl", concatByteArrays(newStbl)))
+                                    minfOut.add(packBox("stbl", concatByteArrays(stblOut)))
                                 } else {
-                                    newMinf.add(mib.data)
+                                    minfOut.add(mib.data)
                                 }
                             }
-                            newMdia.add(rebuildBox("minf", concatByteArrays(newMinf)))
+                            mdiaOut.add(packBox("minf", concatByteArrays(minfOut)))
                         } else {
-                            newMdia.add(mb.data)
+                            mdiaOut.add(mb.data)
                         }
                     }
-                    newSub.add(rebuildBox("mdia", concatByteArrays(newMdia)))
-                } else {
-                    newSub.add(b.data)
+                    out.add(packBox("mdia", concatByteArrays(mdiaOut)))
                 }
-            }
-            return rebuildBox("trak", concatByteArrays(newSub))
-        }
 
-        val newUdta = buildCleanBytedanceUdta()
-
-        fun buildMoov(shiftAmount: Long): ByteArray {
-            val vt = buildVideoTrak(shiftAmount)
-            val at = buildAudioTrak(shiftAmount)
-            val gt = buildGhostTrak(shiftAmount)
-            return rebuildBox("moov", concatByteArrays(listOf(newMvhd, vt, at, gt, newUdta)))
-        }
-
-        // Layout: ftyp + moov (finalMoovSize) + free (8) + mdat
-        onLog("[FASTSTART] Pass 1: Tính toán kích thước moov container...")
-        var dummyMoov = buildMoov(0L)
-        var finalMoovSize = dummyMoov.size
-
-        var newMdatOffset = ftypData.size.toLong() + finalMoovSize + CLEAN_FREE.size
-        val origPayloadStart = mdatBoxInfo.pos + mdatBoxInfo.headerLen
-        var newPayloadStart = newMdatOffset + newMdatHeader.size
-        var shiftAmount = newPayloadStart - origPayloadStart
-
-        onLog("[FASTSTART] Pass 2: Tái định vị chunk offset (shiftAmount = $shiftAmount bytes)...")
-        var finalMoov = buildMoov(shiftAmount)
-        if (finalMoov.size != finalMoovSize) {
-            // Nếu có box nào nhảy size (ví dụ stco -> co64), tính lại một lần nữa
-            finalMoovSize = finalMoov.size
-            newMdatOffset = ftypData.size.toLong() + finalMoovSize + CLEAN_FREE.size
-            newPayloadStart = newMdatOffset + newMdatHeader.size
-            shiftAmount = newPayloadStart - origPayloadStart
-            finalMoov = buildMoov(shiftAmount)
-        }
-
-        onLog("[WRITE] Ghi container [ftyp] (${ftypData.size}B) -> [moov] (${finalMoov.size}B) -> [free] (${CLEAN_FREE.size}B) -> [mdat]...")
-        RandomAccessFile(outputFile, "rw").use { out ->
-            out.setLength(0)
-            out.write(ftypData)
-            out.write(finalMoov)
-            out.write(CLEAN_FREE)
-            out.write(newMdatHeader)
-
-            onLog("[STREAM] Sao chép luồng mdat gốc (${String.format("%.2f", origMdatPayloadLen / (1024.0 * 1024.0))} MB) - 100% Lossless...")
-            RandomAccessFile(inputFile, "r").use { inRaf ->
-                inRaf.seek(origPayloadStart)
-                val buffer = ByteArray(CHUNK_SIZE)
-                var remaining = origMdatPayloadLen
-                while (remaining > 0) {
-                    val toRead = minOf(buffer.size.toLong(), remaining).toInt()
-                    val read = inRaf.read(buffer, 0, toRead)
-                    if (read <= 0) break
-                    out.write(buffer, 0, read)
-                    remaining -= read
-                }
-            }
-
-            if (hasAudio && dummyCount > 0) {
-                onLog("[STREAM] Bơm $dummyCount gói tin Ghost Audio rác vào cuối mdat...")
-                val batchCount = 4096
-                val batchBytes = ByteBuffer.allocate(batchCount * DUMMY_AUDIO_PACKET.size)
-                for (i in 0 until batchCount) {
-                    batchBytes.put(DUMMY_AUDIO_PACKET)
-                }
-                val batchArray = batchBytes.array()
-
-                var remainingPackets = dummyCount
-                while (remainingPackets > 0) {
-                    val currentBatch = minOf(remainingPackets, batchCount)
-                    if (currentBatch == batchCount) {
-                        out.write(batchArray)
-                    } else {
-                        out.write(batchArray, 0, currentBatch * DUMMY_AUDIO_PACKET.size)
-                    }
-                    remainingPackets -= currentBatch
-                }
+                else -> out.add(b.data)
             }
         }
+        return packBox("trak", concatByteArrays(out))
+    }
 
-        val elapsedMs = System.currentTimeMillis() - startTime
-        val outSize = outputFile.length()
-        onLog("[SUCCESS] Hoàn tất tối ưu hóa V4 trong ${elapsedMs}ms! File: ${outputFile.name} (${String.format("%.2f", outSize / (1024.0 * 1024.0))} MB)")
+    private fun indexOfSubArray(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || haystack.size < needle.size) return -1
+        for (i in 0..haystack.size - needle.size) {
+            var match = true
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return i
+        }
+        return -1
     }
 
     private fun parseBoxes(data: ByteArray, offset: Int = 0, end: Int = data.size): List<MP4Box> {
+        val safeEnd = end.coerceAtMost(data.size)
         val boxes = mutableListOf<MP4Box>()
         var pos = offset
         val buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
 
-        while (pos + 8 <= end) {
+        while (pos + 8 <= safeEnd) {
             var size = buf.getInt(pos).toLong() and 0xFFFFFFFFL
             val btype = String(data, pos + 4, 4, Charsets.ISO_8859_1)
             var hdrLen = 8
 
             if (size == 1L) {
-                if (pos + 16 > end) break
+                if (pos + 16 > safeEnd) break
                 size = buf.getLong(pos + 8)
                 hdrLen = 16
             } else if (size == 0L) {
-                size = (end - pos).toLong()
+                size = (safeEnd - pos).toLong()
             }
 
-            if (size < hdrLen || pos + size > end) break
+            if (size < hdrLen || pos + size > safeEnd) break
 
             val boxData = data.copyOfRange(pos, (pos + size).toInt())
             val payload = data.copyOfRange(pos + hdrLen, (pos + size).toInt())
@@ -829,13 +876,13 @@ object Mp4BypassOptimizer {
         return boxes
     }
 
-    private fun rebuildBox(type: String, payload: ByteArray): ByteArray {
-        val totalSize = payload.size.toLong() + 8
+    private fun packBox(type: String, payload: ByteArray): ByteArray {
+        val totalSize = payload.size.toLong() + 8L
         return if (totalSize > 0xFFFFFFFFL) {
             val buf = ByteBuffer.allocate(16 + payload.size).order(ByteOrder.BIG_ENDIAN)
             buf.putInt(1)
             buf.put(type.toByteArray(Charsets.ISO_8859_1))
-            buf.putLong(totalSize + 8)
+            buf.putLong(payload.size.toLong() + 16L)
             buf.put(payload)
             buf.array()
         } else {
@@ -848,8 +895,7 @@ object Mp4BypassOptimizer {
     }
 
     private fun findInBox(boxData: ByteArray, headerLen: Int, targetType: String): MP4Box? {
-        val boxes = parseBoxes(boxData, headerLen, boxData.size)
-        return boxes.find { it.type == targetType }
+        return parseBoxes(boxData, headerLen, boxData.size).find { it.type == targetType }
     }
 
     private fun concatByteArrays(list: List<ByteArray>): ByteArray {

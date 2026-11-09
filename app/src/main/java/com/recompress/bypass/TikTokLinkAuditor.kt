@@ -624,6 +624,9 @@ object TikTokLinkAuditor {
     )
 
     private fun isTikTokDomain(host: String): Boolean {
+        if (RustCoreBridge.isNativeAvailable) {
+            return RustCoreBridge.nativeIsValidTikTokHost(host)
+        }
         val lower = host.lowercase()
         return ALLOWED_TIKTOK_DOMAINS.any { lower == it || lower.endsWith(".$it") }
     }

@@ -32,11 +32,18 @@ class Mp4BypassOptimizerTest {
         assertEquals(udtaBox.size, size)
         assertEquals("udta", type)
 
-        // Verify te_is_reencode and Lavf63.7.100 are present in the box payload
+        // Verify GitHub project link is present and old hazemethod link is completely removed
         val content = String(udtaBox, Charsets.ISO_8859_1)
-        assertTrue(content.contains("te_is_reencode"))
-        assertTrue(content.contains("com.apple.quicktime.video"))
-        assertTrue(content.contains("Lavf63.7.100"))
+        assertTrue(content.contains("https://github.com/j7x69/Recompress-Bypass"))
+        assertFalse(content.lowercase().contains("hazemethod"))
+        assertFalse(content.lowercase().contains("haze"))
+    }
+
+    @Test
+    fun testMakeSlSrPceAscV45() {
+        val asc48k = Mp4BypassOptimizer.makeSlSrPceAsc(3)
+        val expected = byteArrayOf(0x11, 0x80.toByte(), 0x04, 0xc0.toByte(), 0x40, 0x00, 0x20, 0x00)
+        org.junit.Assert.assertArrayEquals(expected, asc48k)
     }
 
     @Test
@@ -129,15 +136,16 @@ class Mp4BypassOptimizerTest {
         assertFalse(UpdateManager.isNewer("1.1.1", "v1.1.0"))
         assertFalse(UpdateManager.isNewer("1.1.1", "1.1.1"))
 
-        // v1.1.4 mới hơn 1.1.1
-        assertTrue(UpdateManager.isNewer("1.1.1", "v1.1.4"))
-        assertFalse(UpdateManager.isNewer("1.1.4", "v1.1.1"))
-        assertFalse(UpdateManager.isNewer("1.1.4", "1.1.4"))
+        // v1.2.0 mới hơn 1.1.4
+        assertTrue(UpdateManager.isNewer("1.1.4", "v1.2.0"))
+        assertFalse(UpdateManager.isNewer("1.2.0", "v1.1.4"))
+        assertFalse(UpdateManager.isNewer("1.2.0", "1.2.0"))
     }
 
     @Test
     fun testUpdateManagerDownloadUrlSecurity() {
-        val githubReleaseUrl = "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.1.0/RecompressBypass-debug.apk"
+        val githubReleaseUrl =
+            "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.2.0/RecompressBypass-debug.apk"
         val cdnRedirectUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123/file.apk"
         val objectsCdnUrl = "https://objects.githubusercontent.com/github-production-release-asset/123/file.apk"
         val fakeRepoUrl = "https://github.com/hacker/Recompress-Bypass/releases/download/v1.0.8.1/RecompressBypass-debug.apk"
@@ -151,8 +159,8 @@ class Mp4BypassOptimizerTest {
     }
 
     @Test
-    fun testRemoteNoticeLanguageFallback() = kotlinx.coroutines.runBlocking {
-        // Trường hợp 1: Chỉ viết tiếng Việt (title, message)
+    fun testRemoteNoticeLanguageFallback() {
+        // Trường hợp 1: Chỉ có bản gốc trong notice.json -> hiển thị nguyên gốc trực tiếp không qua auto-translate
         val noticeViOnly = RemoteNotice(
             active = true,
             level = "warning",
@@ -164,10 +172,10 @@ class Mp4BypassOptimizerTest {
         assertEquals("TikTok cập nhật thuật toán", viContent.second)
 
         val enFallback = NoticeTranslator.resolveNoticeContent(noticeViOnly, AppLanguage.EN)
-        assertEquals("Cảnh báo bảo trì", enFallback.first) // Tự fallback về gốc
+        assertEquals("Cảnh báo bảo trì", enFallback.first)
         assertEquals("TikTok cập nhật thuật toán", enFallback.second)
 
-        // Trường hợp 2: Có viết thêm bản tiếng Anh
+        // Trường hợp 2: Có khai báo title_en / message_en trong notice.json
         val noticeWithEn = RemoteNotice(
             active = true,
             level = "info",
@@ -186,18 +194,18 @@ class Mp4BypassOptimizerTest {
         val sampleFile = java.io.File("G:/videos/davinci export/AI.mp4")
         if (!sampleFile.exists()) return
 
-        val outFile = java.io.File("G:/videos/davinci export/AI_test_v4_out.mp4")
-        if (outFile.exists()) outFile.delete()
+        val outFile = java.io.File("G:/videos/davinci export/AI_test_v4.5_out.mp4")
+        // Ghi sẵn dữ liệu rác vào outFile để kiểm tra việc xóa sạch file cũ thay vì ghi đè
+        outFile.writeBytes(ByteArray(1234) { 0xFF.toByte() })
 
         try {
             Mp4BypassOptimizer.optimize(
                 inputFile = sampleFile,
                 outputFile = outFile,
-                ghostMultiplier = 9,
                 onLog = { println("LOG: $it") }
             )
-            println("OPTIMIZE SUCCESS! Out size: ${outFile.length()}")
-            assertTrue(outFile.exists() && outFile.length() > 0)
+            println("OPTIMIZE v4.5 SUCCESS! Out size: ${outFile.length()}")
+            assertTrue(outFile.exists() && outFile.length() > sampleFile.length())
         } catch (e: Throwable) {
             println("OPTIMIZE THREW EXCEPTION: ${e.javaClass.name}: ${e.message}")
             e.printStackTrace()

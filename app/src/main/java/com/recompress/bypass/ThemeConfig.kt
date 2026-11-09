@@ -1,14 +1,15 @@
 package com.recompress.bypass
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.net.Uri
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.edit
+import androidx.core.graphics.toColorInt
 import java.io.File
 import java.io.FileOutputStream
 
+@Suppress("unused")
 enum class AppAppearance(
     val id: String,
     val title: String,
@@ -200,8 +201,8 @@ object ThemePalette {
 
     fun forCustom(config: CustomThemeConfig): AppColors {
         val parsedAccent = try {
-            Color(android.graphics.Color.parseColor(config.accentHex))
-        } catch (e: Exception) {
+            Color(config.accentHex.toColorInt())
+        } catch (_: Exception) {
             Color(0xFF00E5FF)
         }
         val cardAlpha = config.cardOpacity.coerceIn(0.12f, 1.0f)
@@ -263,7 +264,7 @@ object AppearancePreferences {
 
     fun saveAppearance(context: Context, appearance: AppAppearance) {
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sp.edit().putString(KEY_APPEARANCE, appearance.id).apply()
+        sp.edit { putString(KEY_APPEARANCE, appearance.id) }
     }
 
     fun getCustomConfig(context: Context): CustomThemeConfig {
@@ -282,12 +283,12 @@ object AppearancePreferences {
 
     fun saveCustomConfig(context: Context, config: CustomThemeConfig) {
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sp.edit()
-            .putString(KEY_WALLPAPER_PATH, config.wallpaperPath)
-            .putFloat(KEY_WALLPAPER_DIM, config.wallpaperDim)
-            .putFloat(KEY_CARD_OPACITY, config.cardOpacity)
-            .putString(KEY_ACCENT_HEX, config.accentHex)
-            .apply()
+        sp.edit {
+            putString(KEY_WALLPAPER_PATH, config.wallpaperPath)
+            putFloat(KEY_WALLPAPER_DIM, config.wallpaperDim)
+            putFloat(KEY_CARD_OPACITY, config.cardOpacity)
+            putString(KEY_ACCENT_HEX, config.accentHex)
+        }
     }
 
     fun saveWallpaperFromUri(context: Context, uri: Uri): String? {

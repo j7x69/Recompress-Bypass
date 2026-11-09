@@ -14,6 +14,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 data class AppUpdateInfo(
     val tagName: String,
@@ -22,7 +23,15 @@ data class AppUpdateInfo(
     val apkDownloadUrl: String,
     val apkSizeMb: String,
     val hasUpdate: Boolean
-)
+) {
+    fun getLocalizedChangelog(lang: AppLanguage): String {
+        val raw = changelog.trim()
+        if (raw.isEmpty() || raw == "Không có ghi chú phát hành.") {
+            return if (lang == AppLanguage.EN) "No release notes available." else "Không có ghi chú phát hành."
+        }
+        return raw
+    }
+}
 
 object UpdateManager {
 
@@ -40,9 +49,9 @@ object UpdateManager {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            packageInfo.versionName ?: "1.1.4"
-        } catch (e: Exception) {
-            "1.1.4"
+            packageInfo.versionName ?: "1.2.0"
+        } catch (_: Exception) {
+            "1.2.0"
         }
     }
 
@@ -94,7 +103,7 @@ object UpdateManager {
             val tagName = selectedRelease.optString("tag_name", "").trim()
             val releaseName = selectedRelease.optString("name", tagName).ifBlank { tagName }
             val changelog = selectedRelease.optString("body", "Không có ghi chú phát hành.")
-            val apkSizeMb = String.format("%.2f MB", apkSizeBytes / (1024.0 * 1024.0))
+            val apkSizeMb = String.format(Locale.US, "%.2f MB", apkSizeBytes / (1024.0 * 1024.0))
             val hasUpdate = isNewer(currentVersion, tagName)
 
             AppUpdateInfo(
@@ -105,7 +114,7 @@ object UpdateManager {
                 apkSizeMb = apkSizeMb,
                 hasUpdate = hasUpdate
             )
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -137,21 +146,27 @@ object UpdateManager {
     }
 
     /**
-     * Xác thực URL tải APK có thuộc GitHub chính chủ của tác giả hoặc CDN lưu trữ chính thức của GitHub không
+     * Xác thực URL tải APK có thuộc GitHub chính chủ của tác giả hoặc CDN lưu trữ chính thức của GitHub không.
+     * Ưu tiên kiểm tra ở tầng Native Rust (`librecompress_core.so`).
      */
     fun isValidDownloadUrl(urlStr: String): Boolean {
+        if (RustCoreBridge.isNativeAvailable) {
+            return RustCoreBridge.nativeIsValidDownloadUrl(urlStr)
+        }
         return try {
-            val url = URL(urlStr)
+            val trimmed = urlStr.trim()
+            if (trimmed.contains("@") || trimmed.contains("..")) return false
+            val url = URL(trimmed)
+            if (!url.userInfo.isNullOrEmpty()) return false
             val protocol = url.protocol?.lowercase() ?: ""
             val host = url.host?.lowercase() ?: ""
             val path = url.path ?: ""
             if (protocol != "https") return false
 
-            // Cho phép tải từ chính repo GitHub của tác giả hoặc CDN lưu trữ của GitHub (*.githubusercontent.com)
             (host == "github.com" && path.startsWith("/j7x69/Recompress-Bypass/releases/download/")) ||
                     host.endsWith(".githubusercontent.com") ||
                     host == "githubusercontent.com"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -225,7 +240,7 @@ object UpdateManager {
             }
 
             true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             apkFile.delete()
             false
         }
@@ -311,7 +326,7 @@ object UpdateManager {
             }
 
             apkFile
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             conn?.disconnect()
             null
         }

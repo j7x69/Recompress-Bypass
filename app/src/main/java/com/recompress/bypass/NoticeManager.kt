@@ -35,6 +35,14 @@ data class RemoteNotice(
         }
     }
 
+    fun getTitleForLang(lang: AppLanguage): String {
+        return getExplicitTitle(lang) ?: title
+    }
+
+    fun getMessageForLang(lang: AppLanguage): String {
+        return getExplicitMessage(lang) ?: message
+    }
+
     fun getActionTextForLang(lang: AppLanguage): String {
         val specific = when (lang) {
             AppLanguage.EN -> actionTextEn?.ifBlank { null }
@@ -50,21 +58,20 @@ data class RemoteNotice(
 }
 
 /**
- * Điều phối hiển thị nội dung thông báo theo ngôn ngữ người dùng.
- * Đã loại bỏ hoàn toàn việc gọi API dịch ngoài (MyMemory) để:
- * 1. Tải thông báo tức thì (0ms latency), không làm chậm khởi động app.
- * 2. Bảo mật tuyệt đối, không rò rỉ nội dung thông báo nội bộ.
- * 3. Không bị giới hạn lượt gọi hay lỗi rác chuỗi dịch (MYMEMORY WARNING).
+ * Lấy trực tiếp nội dung từ notice.json gốc mà không qua bất kỳ API hay bộ dịch tự động nào (0ms latency).
  */
 object NoticeTranslator {
-    suspend fun resolveNoticeContent(
+    fun resolveSync(
         notice: RemoteNotice,
         targetLang: AppLanguage
-    ): Pair<String, String> = withContext(Dispatchers.Default) {
-        val resolvedTitle = notice.getExplicitTitle(targetLang) ?: notice.title
-        val resolvedMsg = notice.getExplicitMessage(targetLang) ?: notice.message
-        Pair(resolvedTitle, resolvedMsg)
+    ): Pair<String, String> {
+        return Pair(notice.getTitleForLang(targetLang), notice.getMessageForLang(targetLang))
     }
+
+    fun resolveNoticeContent(
+        notice: RemoteNotice,
+        targetLang: AppLanguage
+    ): Pair<String, String> = resolveSync(notice, targetLang)
 }
 
 object NoticeManager {

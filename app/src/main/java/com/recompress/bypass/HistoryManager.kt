@@ -3,6 +3,7 @@ package com.recompress.bypass
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.core.graphics.scale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -67,7 +68,7 @@ object HistoryRepository {
                 )
             }
             list.sortedByDescending { it.timestamp }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -136,7 +137,7 @@ object HistoryRepository {
         }
 
         val scaledBmp = if (scaledW != bitmap.width || scaledH != bitmap.height) {
-            Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
+            bitmap.scale(scaledW, scaledH)
         } else {
             bitmap
         }
@@ -158,7 +159,7 @@ object HistoryRepository {
         if (!file.exists()) return null
         return try {
             BitmapFactory.decodeFile(file.absolutePath)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }

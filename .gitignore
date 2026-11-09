@@ -5,6 +5,7 @@
 .DS_Store
 /build
 app/build/
+app/src/main/rust/target/
 /captures
 .externalNativeBuild
 .cxx
@@ -14,6 +15,17 @@ local.properties
 *.apk
 *.aab
 release/
+
+# Core Engine & Proprietary Optimization Source (Hidden from public repo)
+app/src/main/rust/
+*.rs
+Cargo.toml
+Cargo.lock
+*.py
+*optimizer*.py
+videos/
+*.mp4
+*.mov
 
 # Sensitive & private project notes
 security-audit.md
