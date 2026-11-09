@@ -1,8 +1,8 @@
 {
   "active": true,
-  "level": "error",
-  "title": "Video Optimizer Not Available",
-  "message": "In Testing phase. we will lock down the Optimizer section. ",
+  "level": "info",
+  "title": "Updating",
+  "message": "In Testing phase. 3/3 videos passed. new update incoming ",
   "action_text": "",
   "action_url": "",
   "block_actions": false,
