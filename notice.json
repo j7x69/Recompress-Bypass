@@ -1,8 +1,8 @@
 {
   "active": true,
   "level": "info",
-  "title": "Updating",
-  "message": "Working NOW",
+  "title": "small announcement",
+  "message": "life is hard, dev have to work his ass off. might update some new feature once a week.. ",
   "action_text": "",
   "action_url": "",
   "block_actions": false,
