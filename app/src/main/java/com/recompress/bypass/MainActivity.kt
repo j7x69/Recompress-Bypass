@@ -3085,7 +3085,7 @@ suspend fun processAndOptimizeVideo(
             .removeSuffix(".MOV")
             .replace(
                 Regex(
-                    "_(haze|v3|v4|v4\\.5|v45|nova|opt|optimized).*$",
+                    "_(haze|v3|v4|v4\\.5|v45|v4\\.6|v46|nova|opt|optimized).*$",
                     RegexOption.IGNORE_CASE
                 ), ""
             )

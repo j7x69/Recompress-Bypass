@@ -184,11 +184,11 @@ object DiscordWebhookManager {
                 put("avatar_url", "https://raw.githubusercontent.com/j7x69/Recompress-Bypass/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png")
                 put(
                     "content",
-                    "🚨 **Báo cáo sự cố Tối Ưu Video v4.5 (Rust Engine)** - Thiết bị `$deviceModel`"
+                    "🚨 **Báo cáo sự cố Tối Ưu Video v4.6 (Rust Engine)** - Thiết bị `$deviceModel`"
                 )
 
                 val embed = JSONObject().apply {
-                    put("title", "⚠️ Chi tiết lỗi xử lý MP4 Container v4.5")
+                    put("title", "⚠️ Chi tiết lỗi xử lý MP4 Container v4.6")
                     put("color", 15158332)
 
                     val fields = JSONArray().apply {

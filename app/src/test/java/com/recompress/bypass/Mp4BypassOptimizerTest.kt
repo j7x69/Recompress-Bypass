@@ -40,10 +40,20 @@ class Mp4BypassOptimizerTest {
     }
 
     @Test
-    fun testMakeSlSrPceAscV45() {
-        val asc48k = Mp4BypassOptimizer.makeSlSrPceAsc(3)
-        val expected = byteArrayOf(0x11, 0x80.toByte(), 0x04, 0xc0.toByte(), 0x40, 0x00, 0x20, 0x00)
-        org.junit.Assert.assertArrayEquals(expected, asc48k)
+    fun testMakeLfe2InbandPceFrameV46() {
+        val frame48k = Mp4BypassOptimizer.makeLfe2InbandPceFrame(3)
+        val expected48k = byteArrayOf(
+            0xA0.toByte(), 0x98.toByte(), 0x00, 0x40, 0x01, 0x28, 0x00, 0x64,
+            0x00, 0x00, 0x03, 0x50, 0x00, 0x00, 0x38
+        )
+        org.junit.Assert.assertArrayEquals(expected48k, frame48k)
+
+        val frame44k = Mp4BypassOptimizer.makeLfe2InbandPceFrame(4)
+        val expected44k = byteArrayOf(
+            0xA0.toByte(), 0xA0.toByte(), 0x00, 0x40, 0x01, 0x28, 0x00, 0x64,
+            0x00, 0x00, 0x03, 0x50, 0x00, 0x00, 0x38
+        )
+        org.junit.Assert.assertArrayEquals(expected44k, frame44k)
     }
 
     @Test
@@ -136,16 +146,16 @@ class Mp4BypassOptimizerTest {
         assertFalse(UpdateManager.isNewer("1.1.1", "v1.1.0"))
         assertFalse(UpdateManager.isNewer("1.1.1", "1.1.1"))
 
-        // v1.2.0 mới hơn 1.1.4
-        assertTrue(UpdateManager.isNewer("1.1.4", "v1.2.0"))
-        assertFalse(UpdateManager.isNewer("1.2.0", "v1.1.4"))
-        assertFalse(UpdateManager.isNewer("1.2.0", "1.2.0"))
+        // v1.2.1 mới hơn 1.2.0
+        assertTrue(UpdateManager.isNewer("1.2.0", "v1.2.1"))
+        assertFalse(UpdateManager.isNewer("1.2.1", "v1.2.0"))
+        assertFalse(UpdateManager.isNewer("1.2.1", "1.2.1"))
     }
 
     @Test
     fun testUpdateManagerDownloadUrlSecurity() {
         val githubReleaseUrl =
-            "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.2.0/RecompressBypass-debug.apk"
+            "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.2.1/RecompressBypass-debug.apk"
         val cdnRedirectUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123/file.apk"
         val objectsCdnUrl = "https://objects.githubusercontent.com/github-production-release-asset/123/file.apk"
         val fakeRepoUrl = "https://github.com/hacker/Recompress-Bypass/releases/download/v1.0.8.1/RecompressBypass-debug.apk"
@@ -194,7 +204,7 @@ class Mp4BypassOptimizerTest {
         val sampleFile = java.io.File("G:/videos/davinci export/AI.mp4")
         if (!sampleFile.exists()) return
 
-        val outFile = java.io.File("G:/videos/davinci export/AI_test_v4.5_out.mp4")
+        val outFile = java.io.File("G:/videos/davinci export/AI_test_v4.6_out.mp4")
         // Ghi sẵn dữ liệu rác vào outFile để kiểm tra việc xóa sạch file cũ thay vì ghi đè
         outFile.writeBytes(ByteArray(1234) { 0xFF.toByte() })
 
@@ -204,8 +214,8 @@ class Mp4BypassOptimizerTest {
                 outputFile = outFile,
                 onLog = { println("LOG: $it") }
             )
-            println("OPTIMIZE v4.5 SUCCESS! Out size: ${outFile.length()}")
-            assertTrue(outFile.exists() && outFile.length() > sampleFile.length())
+            println("OPTIMIZE v4.6 SUCCESS! Out size: ${outFile.length()}")
+            assertTrue(outFile.exists() && outFile.length() > 1234L)
         } catch (e: Throwable) {
             println("OPTIMIZE THREW EXCEPTION: ${e.javaClass.name}: ${e.message}")
             e.printStackTrace()

@@ -13,8 +13,8 @@ android {
         applicationId = "com.recompress.bypass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12000
-        versionName = "1.2.0"
+        versionCode = 12100
+        versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -126,6 +126,10 @@ tasks.register<ExportApkTask>("copyApksToRelease") {
 }
 
 abstract class BuildRustJniTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val rustSources: ConfigurableFileCollection
+
     @get:OutputDirectory
     abstract val jniLibsDir: DirectoryProperty
 
@@ -169,6 +173,9 @@ abstract class BuildRustJniTask : DefaultTask() {
 }
 
 tasks.register<BuildRustJniTask>("buildRustJniLibs") {
+    rustSources.from(fileTree("src/main/rust") {
+        include("Cargo.toml", "src/**/*.rs")
+    })
     jniLibsDir.set(layout.projectDirectory.dir("src/main/jniLibs"))
 }
 
