@@ -1,3 +1,5 @@
+![☘️]([https://count.getloli.com/@:name](https://count.getloli.com/@recompress-bypass?theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto))
+
 # RecompressBypass 🚀
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-green.svg)](https://developer.android.com)
