@@ -1,7 +1,3 @@
- <p align="center">
-      <img src="https://count.getloli.com/@recompress-bypass?theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="recompress-bypass" />
-    </p>
-
 # RecompressBypass 🚀
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-green.svg)](https://developer.android.com)
@@ -13,7 +9,9 @@ A lightweight, native Android media companion designed to harmonize digital vide
 preserving creator-intended visual clarity and frame pacing across modern social streaming workflows
 (2K / 4K / 60FPS).
 
----
+ <p align="center">
+      <img src="https://count.getloli.com/@recompress-bypass?theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt="recompress-bypass" />
+    </p>
 
 ## 🌐 Languages / Ngôn ngữ
 - [English (Main)](#-english)
