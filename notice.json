@@ -1,8 +1,8 @@
 {
   "active": true,
   "level": "info",
-  "title": "small announcement",
-  "message": "life is hard, dev have to work his ass off. might update some new feature once a week.. ",
+  "title": "announcement",
+  "message": "V1.2.1 Fix HDR issue and up to 4k60fps",
   "action_text": "",
   "action_url": "",
   "block_actions": false,
