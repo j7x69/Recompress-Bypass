@@ -2,58 +2,52 @@ package com.recompress.bypass
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class Mp4BypassOptimizerTest {
 
     @Test
-    fun testWatermarkDetection() {
-        val hazeData = "Created with Haze Quality Method".toByteArray(Charsets.ISO_8859_1)
-        val vagueData = "vague-infinity engine".toByteArray(Charsets.ISO_8859_1)
-        val cleanData = "Clean Apple QuickTime Movie".toByteArray(Charsets.ISO_8859_1)
-
-        assertTrue(Mp4BypassOptimizer.isHazeOrWatermark(hazeData))
-        assertTrue(Mp4BypassOptimizer.isHazeOrWatermark(vagueData))
-        assertFalse(Mp4BypassOptimizer.isHazeOrWatermark(cleanData))
+    fun testOptimizeRejectsMissingInputFile() {
+        val tempDir = java.nio.file.Files.createTempDirectory("opt_contract_").toFile()
+        try {
+            val missing = java.io.File(tempDir, "missing.mp4")
+            val out = java.io.File(tempDir, "out.mp4")
+            assertThrows(IllegalArgumentException::class.java) {
+                Mp4BypassOptimizer.optimize(inputFile = missing, outputFile = out)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 
     @Test
-    fun testBuildCleanBytedanceUdta() {
-        val udtaBox = Mp4BypassOptimizer.buildCleanBytedanceUdta()
-        assertTrue(udtaBox.size > 8)
-
-        val buf = ByteBuffer.wrap(udtaBox).order(ByteOrder.BIG_ENDIAN)
-        val size = buf.int
-        val type = String(udtaBox, 4, 4, Charsets.ISO_8859_1)
-
-        assertEquals(udtaBox.size, size)
-        assertEquals("udta", type)
-
-        // Verify GitHub project link is present and old hazemethod link is completely removed
-        val content = String(udtaBox, Charsets.ISO_8859_1)
-        assertTrue(content.contains("https://github.com/j7x69/Recompress-Bypass"))
-        assertFalse(content.lowercase().contains("hazemethod"))
-        assertFalse(content.lowercase().contains("haze"))
+    fun testOptimizeRejectsIdenticalInputAndOutputPaths() {
+        val tempDir = java.nio.file.Files.createTempDirectory("opt_contract_").toFile()
+        try {
+            val same = java.io.File(tempDir, "video.mp4").apply { writeBytes(ByteArray(32)) }
+            assertThrows(IllegalArgumentException::class.java) {
+                Mp4BypassOptimizer.optimize(inputFile = same, outputFile = same)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 
     @Test
-    fun testMakeLfe2InbandPceFrameV46() {
-        val frame48k = Mp4BypassOptimizer.makeLfe2InbandPceFrame(3)
-        val expected48k = byteArrayOf(
-            0xA0.toByte(), 0x98.toByte(), 0x00, 0x40, 0x01, 0x28, 0x00, 0x64,
-            0x00, 0x00, 0x03, 0x50, 0x00, 0x00, 0x38
-        )
-        org.junit.Assert.assertArrayEquals(expected48k, frame48k)
-
-        val frame44k = Mp4BypassOptimizer.makeLfe2InbandPceFrame(4)
-        val expected44k = byteArrayOf(
-            0xA0.toByte(), 0xA0.toByte(), 0x00, 0x40, 0x01, 0x28, 0x00, 0x64,
-            0x00, 0x00, 0x03, 0x50, 0x00, 0x00, 0x38
-        )
-        org.junit.Assert.assertArrayEquals(expected44k, frame44k)
+    fun testOptimizeFailsFastWhenNativeUnavailableOnHost() {
+        if (RustCoreBridge.isNativeAvailable) return
+        val tempDir = java.nio.file.Files.createTempDirectory("opt_contract_").toFile()
+        try {
+            val input = java.io.File(tempDir, "in.mp4").apply { writeBytes(ByteArray(64)) }
+            val output = java.io.File(tempDir, "out.mp4")
+            assertThrows(IllegalStateException::class.java) {
+                Mp4BypassOptimizer.optimize(inputFile = input, outputFile = output)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 
     @Test
@@ -197,31 +191,5 @@ class Mp4BypassOptimizerTest {
         val enResolved = NoticeTranslator.resolveNoticeContent(noticeWithEn, AppLanguage.EN)
         assertEquals("Important Update", enResolved.first)
         assertEquals("Bug fix available", enResolved.second)
-    }
-
-    @Test
-    fun testOptimizeRealSampleVideo() {
-        val sampleFile = java.io.File("G:/videos/davinci export/AI.mp4")
-        if (!sampleFile.exists()) return
-
-        val outFile = java.io.File("G:/videos/davinci export/AI_test_v4.6_out.mp4")
-        // Ghi sẵn dữ liệu rác vào outFile để kiểm tra việc xóa sạch file cũ thay vì ghi đè
-        outFile.writeBytes(ByteArray(1234) { 0xFF.toByte() })
-
-        try {
-            Mp4BypassOptimizer.optimize(
-                inputFile = sampleFile,
-                outputFile = outFile,
-                onLog = { println("LOG: $it") }
-            )
-            println("OPTIMIZE v4.6 SUCCESS! Out size: ${outFile.length()}")
-            assertTrue(outFile.exists() && outFile.length() > 1234L)
-        } catch (e: Throwable) {
-            println("OPTIMIZE THREW EXCEPTION: ${e.javaClass.name}: ${e.message}")
-            e.printStackTrace()
-            throw e
-        } finally {
-            if (outFile.exists()) outFile.delete()
-        }
     }
 }

@@ -18,9 +18,8 @@
 # Preserve Android FileProvider
 -keep class androidx.core.content.FileProvider { *; }
 
-# Preserve MP4 Optimizer & Rust JNI Bridge internals
+# Preserve Rust JNI Bridge entrypoints
 -keep class com.recompress.bypass.RustCoreBridge { *; }
--keep class com.recompress.bypass.Mp4BypassOptimizer { *; }
 -keep class com.recompress.bypass.UpdateManager { *; }
 -keep class com.recompress.bypass.NoticeManager { *; }
 -keep class com.recompress.bypass.HistoryRepository { *; }

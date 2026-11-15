@@ -710,7 +710,7 @@ fun MinimalistOptimizerApp(
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } else {
-                                    videoPicker.launch("video/mp4")
+                                    videoPicker.launch("video/*")
                                 }
                             }
                             .padding(14.dp)
@@ -2997,12 +2997,27 @@ fun resolveVideoUri(context: Context, record: CompressedVideoRecord): Uri? {
 suspend fun extractVideoMetadata(context: Context, uri: Uri): VideoMetadata = withContext(Dispatchers.IO) {
     var name = "video.mp4"
     var sizeBytes = 0L
-    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (nameIdx != -1) name = cursor.getString(nameIdx)
-            if (sizeIdx != -1) sizeBytes = cursor.getLong(sizeIdx)
+    try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIdx != -1 && !cursor.isNull(nameIdx)) {
+                    cursor.getString(nameIdx)?.takeIf { it.isNotBlank() }?.let { name = it }
+                }
+                if (sizeIdx != -1 && !cursor.isNull(sizeIdx)) {
+                    sizeBytes = cursor.getLong(sizeIdx)
+                }
+            }
+        }
+    } catch (_: Exception) {
+    }
+    if (sizeBytes <= 0L) {
+        try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                if (afd.length > 0L) sizeBytes = afd.length
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -3063,10 +3078,16 @@ suspend fun processAndOptimizeVideo(
         }
     }
 
+    val resolver = context.contentResolver
+    var pendingItemUri: Uri? = null
+
     try {
-        context.contentResolver.openInputStream(media.uri)?.use { input ->
+        val streamBufSize = 1024 * 1024
+        val inStream = resolver.openInputStream(media.uri)
+            ?: throw IllegalStateException(if (isEn) "Cannot read selected video." else "Không thể đọc video đã chọn.")
+        inStream.use { input ->
             FileOutputStream(tempIn, false).use { output ->
-                input.copyTo(output)
+                input.copyTo(output, bufferSize = streamBufSize)
             }
         }
 
@@ -3077,6 +3098,14 @@ suspend fun processAndOptimizeVideo(
             outputFile = tempOut,
             onLog = { /* Không ghi chi tiết kỹ thuật vào log hiển thị */ }
         )
+
+        // Xóa ngay bản sao đầu vào để giảm dung lượng đỉnh từ 3x xuống 2x khi ghi ra MediaStore
+        if (tempIn.exists()) tempIn.delete()
+
+        val optimizedBytes = tempOut.length()
+        if (optimizedBytes <= 0L) {
+            throw IllegalStateException(if (isEn) "Optimized output is empty." else "Tệp đầu ra bị rỗng.")
+        }
 
         val cleanBaseName = media.name
             .removeSuffix(".mp4")
@@ -3089,6 +3118,7 @@ suspend fun processAndOptimizeVideo(
                     RegexOption.IGNORE_CASE
                 ), ""
             )
+            .ifBlank { "video" }
         val outFileName = "${cleanBaseName}_opt.mp4"
 
         val values = ContentValues().apply {
@@ -3100,7 +3130,6 @@ suspend fun processAndOptimizeVideo(
             }
         }
 
-        val resolver = context.contentResolver
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         } else {
@@ -3108,10 +3137,13 @@ suspend fun processAndOptimizeVideo(
         }
         val itemUri = resolver.insert(collection, values)
             ?: throw IllegalStateException(if (isEn) "Cannot save video to gallery." else "Không thể lưu video vào thư viện.")
+        pendingItemUri = itemUri
 
-        resolver.openOutputStream(itemUri)?.use { outStream ->
-            tempOut.inputStream().use { inStream ->
-                inStream.copyTo(outStream)
+        val outStream = resolver.openOutputStream(itemUri)
+            ?: throw IllegalStateException(if (isEn) "Cannot write video to gallery." else "Không thể ghi video vào thư viện.")
+        outStream.use { out ->
+            tempOut.inputStream().use { inFile ->
+                inFile.copyTo(out, bufferSize = streamBufSize)
             }
         }
 
@@ -3120,6 +3152,7 @@ suspend fun processAndOptimizeVideo(
             values.put(MediaStore.Video.Media.IS_PENDING, 0)
             resolver.update(itemUri, values, null, null)
         }
+        pendingItemUri = null
 
         val elapsedMs = System.currentTimeMillis() - startTime
         appendLog(
@@ -3143,7 +3176,7 @@ suspend fun processAndOptimizeVideo(
             optimizedSizeMb = String.format(
                 Locale.US,
                 "%.2f",
-                tempOut.length() / (1024.0 * 1024.0)
+                optimizedBytes / (1024.0 * 1024.0)
             ),
             resolution = media.resolution,
             durationSec = media.durationSec,
@@ -3157,6 +3190,12 @@ suspend fun processAndOptimizeVideo(
         HistoryRepository.saveRecord(context, record)
         record
     } catch (_: Throwable) {
+        pendingItemUri?.let { orphanUri ->
+            try {
+                resolver.delete(orphanUri, null, null)
+            } catch (_: Exception) {
+            }
+        }
         val cleanErr = if (isEn) {
             "Unable to optimize this video file."
         } else {

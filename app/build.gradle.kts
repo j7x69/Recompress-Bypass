@@ -174,7 +174,7 @@ abstract class BuildRustJniTask : DefaultTask() {
 
 tasks.register<BuildRustJniTask>("buildRustJniLibs") {
     rustSources.from(fileTree("src/main/rust") {
-        include("Cargo.toml", "src/**/*.rs")
+        include("Cargo.toml", "Cargo.lock", ".cargo/config.toml", "src/**/*.rs")
     })
     jniLibsDir.set(layout.projectDirectory.dir("src/main/jniLibs"))
 }
