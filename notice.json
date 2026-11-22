@@ -1,12 +1,12 @@
 {
   "active": true,
-  "level": "info",
-  "title": "announcement",
-  "message": "V1.2.1 Fix HDR issue and up to 4k60fps",
-  "action_text": "",
-  "action_url": "",
+  "level": "warning",
+  "title": "Cập nhật v1.2.5 — Giao diện mới & Nén video",
+  "message": "Bản v1.2.5 nâng cấp giao diện Pro Studio mới, thêm nén video 3 mức và chuyển sang chứng chỉ phát hành chính thức. Nếu đang dùng bản cũ (≤ 1.2.1), vui lòng gỡ bản cũ trước rồi tải cài thủ công v1.2.5 từ GitHub (chỉ cần làm 1 lần duy nhất).",
+  "action_text": "Tải v1.2.5 trên GitHub",
+  "action_url": "https://github.com/j7x69/Recompress-Bypass/releases/latest",
   "block_actions": false,
-  "title_en": "",
-  "message_en": "",
-  "action_text_en": ""
+  "title_en": "Update v1.2.5 — New UI & Video Compression",
+  "message_en": "v1.2.5 introduces the new Pro Studio UI, 3-level hardware video compression, and an official release signature. If you are on an older version (<= 1.2.1), please uninstall the old app first and install v1.2.5 from GitHub (one-time only).",
+  "action_text_en": "Download v1.2.5 on GitHub"
 }

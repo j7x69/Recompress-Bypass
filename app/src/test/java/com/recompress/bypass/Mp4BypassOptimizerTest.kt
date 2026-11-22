@@ -65,8 +65,8 @@ class Mp4BypassOptimizerTest {
         val enStrings = AppStrings.forLanguage(AppLanguage.EN)
         val viStrings = AppStrings.forLanguage(AppLanguage.VI)
 
-        assertEquals("Lossless Video Quality Optimizer", enStrings.appSubtitle)
-        assertEquals("Tối ưu & Giữ nguyên chất lượng video gốc", viStrings.appSubtitle)
+        assertEquals("Lossless MP4 · TikTok", enStrings.appSubtitle)
+        assertEquals("MP4 nguyên bản · TikTok", viStrings.appSubtitle)
         assertTrue(enStrings.tips.isNotEmpty())
         assertTrue(viStrings.tips.isNotEmpty())
         assertEquals(5, enStrings.tips.size)
@@ -144,12 +144,17 @@ class Mp4BypassOptimizerTest {
         assertTrue(UpdateManager.isNewer("1.2.0", "v1.2.1"))
         assertFalse(UpdateManager.isNewer("1.2.1", "v1.2.0"))
         assertFalse(UpdateManager.isNewer("1.2.1", "1.2.1"))
+
+        // v1.2.5 mới hơn 1.2.1
+        assertTrue(UpdateManager.isNewer("1.2.1", "v1.2.5"))
+        assertFalse(UpdateManager.isNewer("1.2.5", "v1.2.1"))
+        assertFalse(UpdateManager.isNewer("1.2.5", "1.2.5"))
     }
 
     @Test
     fun testUpdateManagerDownloadUrlSecurity() {
         val githubReleaseUrl =
-            "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.2.1/RecompressBypass-debug.apk"
+            "https://github.com/j7x69/Recompress-Bypass/releases/download/v1.2.5/RecompressBypass-debug.apk"
         val cdnRedirectUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123/file.apk"
         val objectsCdnUrl = "https://objects.githubusercontent.com/github-production-release-asset/123/file.apk"
         val fakeRepoUrl = "https://github.com/hacker/Recompress-Bypass/releases/download/v1.0.8.1/RecompressBypass-debug.apk"

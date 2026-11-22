@@ -165,7 +165,8 @@ object DiscordWebhookManager {
         resolution: String = "N/A",
         durationSec: String = "N/A",
         errorSummary: String,
-        logs: List<String>
+        logs: List<String>,
+        operationTag: String = "Tối Ưu Video v4.6 (Rust Engine)"
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             val webhookUrl = resolveWebhookUrl(context)
@@ -176,7 +177,7 @@ object DiscordWebhookManager {
             val androidOs = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})"
             val currentTime = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
 
-            val formattedLogs = buildLogSnippet(logs, maxLen = 950)
+            val logChunks = buildLogChunks(logs, maxFieldLen = 950, maxFields = 3)
             val safeSummary = if (errorSummary.length > 500) errorSummary.take(500) + "..." else errorSummary
 
             val payload = JSONObject().apply {
@@ -184,11 +185,11 @@ object DiscordWebhookManager {
                 put("avatar_url", "https://raw.githubusercontent.com/j7x69/Recompress-Bypass/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png")
                 put(
                     "content",
-                    "🚨 **Báo cáo sự cố Tối Ưu Video v4.6 (Rust Engine)** - Thiết bị `$deviceModel`"
+                    "🚨 **Báo cáo sự cố $operationTag** - Thiết bị `$deviceModel`"
                 )
 
                 val embed = JSONObject().apply {
-                    put("title", "⚠️ Chi tiết lỗi xử lý MP4 Container v4.6")
+                    put("title", "⚠️ Chi tiết nhật ký xử lý ($operationTag)")
                     put("color", 15158332)
 
                     val fields = JSONArray().apply {
@@ -205,23 +206,30 @@ object DiscordWebhookManager {
                         })
 
                         put(JSONObject().apply {
-                            put("name", "🛑 Nguyên Nhân Lỗi Gốc")
+                            put("name", "🛑 Nguyên Nhân / Tóm Tắt")
                             put("value", "```\n$safeSummary\n```")
                             put("inline", false)
                         })
 
-                        put(JSONObject().apply {
-                            put("name", "📜 Dãy Nhật Ký Xử Lý (Logs)")
-                            put("value", "```\n$formattedLogs\n```")
-                            put("inline", false)
-                        })
+                        logChunks.forEachIndexed { idx, chunk ->
+                            val fieldTitle = if (logChunks.size == 1) {
+                                "📜 Nhật Ký Xử Lý Đầy Đủ (Full Logs)"
+                            } else {
+                                "📜 Nhật Ký Xử Lý (${idx + 1}/${logChunks.size})"
+                            }
+                            put(JSONObject().apply {
+                                put("name", fieldTitle)
+                                put("value", "```\n$chunk\n```")
+                                put("inline", false)
+                            })
+                        }
                     }
 
                     put("fields", fields)
                     put("footer", JSONObject().apply {
                         put(
                             "text",
-                            "RecompressBypass v$appVersion • Rust Native Security Dispatcher"
+                            "RecompressBypass v$appVersion • Full Technical Diagnostic Report"
                         )
                     })
                 }
@@ -253,19 +261,67 @@ object DiscordWebhookManager {
         }
     }
 
-    private fun buildLogSnippet(logs: List<String>, maxLen: Int): String {
-        if (logs.isEmpty()) return "Không có log."
-        val reversed = logs.reversed()
-        val collected = mutableListOf<String>()
-        var currentLen = 0
+    internal fun buildLogChunks(
+        logs: List<String>,
+        maxFieldLen: Int = 950,
+        maxFields: Int = 3
+    ): List<String> {
+        if (logs.isEmpty()) return listOf("Không có log.")
+        val safeMaxLen = maxFieldLen.coerceAtLeast(100)
+        val safeMaxFields = maxFields.coerceAtLeast(1)
 
-        for (line in reversed) {
-            val nextLen = currentLen + line.length + 1
-            if (nextLen > maxLen && collected.isNotEmpty()) break
-            collected.add(line)
-            currentLen = nextLen
+        // Normalize lines so no single line exceeds safeMaxLen
+        val normalized = mutableListOf<String>()
+        for (rawLine in logs) {
+            val clean = rawLine.replace("```", "'''")
+            if (clean.length <= safeMaxLen) {
+                normalized.add(clean)
+            } else {
+                var offset = 0
+                while (offset < clean.length) {
+                    val end = (offset + safeMaxLen).coerceAtMost(clean.length)
+                    normalized.add(clean.substring(offset, end))
+                    offset = end
+                }
+            }
         }
 
-        return collected.reversed().joinToString("\n")
+        // Pack lines into chunks from start to end
+        val allChunks = mutableListOf<String>()
+        val current = StringBuilder()
+        for (line in normalized) {
+            val additionLen = if (current.isEmpty()) line.length else line.length + 1
+            if (current.length + additionLen > safeMaxLen && current.isNotEmpty()) {
+                allChunks.add(current.toString())
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append('\n')
+            current.append(line)
+        }
+        if (current.isNotEmpty()) {
+            allChunks.add(current.toString())
+        }
+
+        if (allChunks.size <= safeMaxFields) {
+            return allChunks
+        }
+
+        // If logs exceed maxFields, keep first chunk (metadata/container info) + last (maxFields - 1) chunks (errors/tail)
+        return if (safeMaxFields == 1) {
+            listOf(allChunks.last())
+        } else {
+            val tailCount = safeMaxFields - 1
+            val result = mutableListOf(allChunks.first())
+            val tail = allChunks.takeLast(tailCount).toMutableList()
+            val marker = "... [truncated middle logs] ...\n"
+            val firstTail = tail.first()
+            tail[0] = if (marker.length + firstTail.length <= safeMaxLen) {
+                marker + firstTail
+            } else {
+                marker + firstTail.takeLast((safeMaxLen - marker.length).coerceAtLeast(0))
+            }
+            result.addAll(tail)
+            result
+        }
     }
 }

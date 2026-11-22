@@ -27,6 +27,8 @@ import androidx.core.content.FileProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -38,6 +40,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -48,11 +52,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Favorite
@@ -79,8 +85,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -110,6 +119,12 @@ data class VideoMetadata(
     val resolution: String,
     val durationSec: String,
     val thumbnail: Bitmap?
+)
+
+data class OptimizeProcessResult(
+    val record: CompressedVideoRecord?,
+    val detailedLogs: List<String>,
+    val rawErrorSummary: String? = null
 )
 
 object SponsorPromptManager {
@@ -232,6 +247,7 @@ fun MinimalistOptimizerApp(
     onCustomThemeConfigChange: (CustomThemeConfig) -> Unit
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val appColors = LocalAppColors.current
     val strings = AppStrings.forLanguage(currentLanguage)
@@ -310,6 +326,8 @@ fun MinimalistOptimizerApp(
     // Trạng thái Live Log Dialog khi đang tối ưu
     var isCompressing by remember { mutableStateOf(false) }
     var currentCompressLogs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var currentDetailedLogs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var currentRawErrorSummary by remember { mutableStateOf<String?>(null) }
     var currentCompressStatus by remember {
         mutableStateOf(
             if (currentLanguage == AppLanguage.EN) "Preparing..." else "Chuẩn bị xử lý..."
@@ -318,6 +336,12 @@ fun MinimalistOptimizerApp(
     var currentSavedRecord by remember { mutableStateOf<CompressedVideoRecord?>(null) }
     var currentProcessingVideoMeta by remember { mutableStateOf<VideoMetadata?>(null) }
     var showLiveLogDialog by remember { mutableStateOf(false) }
+
+    // Trạng thái Nén video & Cảnh báo video > 100 MB
+    var showCompressDialog by remember { mutableStateOf(false) }
+    var compressDialogInitialMeta by remember { mutableStateOf<VideoMetadata?>(null) }
+    var compressDialogChained by remember { mutableStateOf(false) }
+    var pendingLargeVideoMeta by remember { mutableStateOf<VideoMetadata?>(null) }
 
     // Trạng thái Dialog xem chi tiết Video & Log từ Lịch sử
     var selectedHistoryRecord by remember { mutableStateOf<CompressedVideoRecord?>(null) }
@@ -329,52 +353,67 @@ fun MinimalistOptimizerApp(
         label = "bgColor"
     )
 
+    // Helper khởi chạy luồng Optimize (có thể nhận file tạm đã nén từ luồng >100MB)
+    fun startOptimizeFlow(meta: VideoMetadata, overrideInputFile: File? = null) {
+        scope.launch {
+            showLiveLogDialog = true
+            isCompressing = true
+            currentCompressLogs = listOf(
+                if (currentLanguage == AppLanguage.EN) "[START] Reading video..."
+                else "[START] Đang đọc video..."
+            )
+            currentDetailedLogs = emptyList()
+            currentRawErrorSummary = null
+            currentCompressStatus =
+                if (currentLanguage == AppLanguage.EN) "Reading video..." else "Đang đọc video..."
+            currentSavedRecord = null
+            currentProcessingVideoMeta = meta
+            val newLogs = currentCompressLogs.toMutableList()
+
+            val result = processAndOptimizeVideo(
+                context = context,
+                media = meta,
+                historyIndex = historyList.size,
+                language = currentLanguage,
+                overrideInputFile = overrideInputFile,
+                onLog = { logLine ->
+                    newLogs.add(logLine)
+                    currentCompressLogs = newLogs.toList()
+                    when {
+                        logLine.startsWith("[PROCESS]") -> currentCompressStatus =
+                            if (currentLanguage == AppLanguage.EN) "Optimizing video..." else "Đang tối ưu video..."
+
+                        logLine.startsWith("[SUCCESS]") -> currentCompressStatus =
+                            if (currentLanguage == AppLanguage.EN) "Optimization complete!" else "Hoàn tất tối ưu video!"
+                    }
+                }
+            )
+
+            isCompressing = false
+            currentSavedRecord = result.record
+            currentDetailedLogs = result.detailedLogs
+            currentRawErrorSummary = result.rawErrorSummary
+            if (result.record != null) {
+                historyList = HistoryRepository.loadHistory(context)
+                if (SponsorPromptManager.onVideoOptimizeSuccess(context)) {
+                    kotlinx.coroutines.delay(450L)
+                    showSponsorDialog = true
+                }
+            }
+        }
+    }
+
     // Bộ chọn Video MP4 cho tác vụ "Tối ưu video"
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             scope.launch {
-                showLiveLogDialog = true
-                isCompressing = true
-                currentCompressLogs = listOf(
-                    if (currentLanguage == AppLanguage.EN) "[START] Reading video..."
-                    else "[START] Đang đọc video..."
-                )
-                currentCompressStatus =
-                    if (currentLanguage == AppLanguage.EN) "Reading video..." else "Đang đọc video..."
-                currentSavedRecord = null
-
                 val meta = extractVideoMetadata(context, uri)
-                currentProcessingVideoMeta = meta
-                val newLogs = currentCompressLogs.toMutableList()
-
-                val savedRecord = processAndOptimizeVideo(
-                    context = context,
-                    media = meta,
-                    historyIndex = historyList.size,
-                    language = currentLanguage,
-                    onLog = { logLine ->
-                        newLogs.add(logLine)
-                        currentCompressLogs = newLogs.toList()
-                        when {
-                            logLine.startsWith("[PROCESS]") -> currentCompressStatus =
-                                if (currentLanguage == AppLanguage.EN) "Optimizing video..." else "Đang tối ưu video..."
-
-                            logLine.startsWith("[SUCCESS]") -> currentCompressStatus =
-                                if (currentLanguage == AppLanguage.EN) "Optimization complete!" else "Hoàn tất tối ưu video!"
-                        }
-                    }
-                )
-
-                isCompressing = false
-                currentSavedRecord = savedRecord
-                if (savedRecord != null) {
-                    historyList = HistoryRepository.loadHistory(context)
-                    if (SponsorPromptManager.onVideoOptimizeSuccess(context)) {
-                        kotlinx.coroutines.delay(450L)
-                        showSponsorDialog = true
-                    }
+                if (meta.sizeBytes >= VideoCompressor.LARGE_VIDEO_THRESHOLD_BYTES) {
+                    pendingLargeVideoMeta = meta
+                } else {
+                    startOptimizeFlow(meta)
                 }
             }
         }
@@ -408,13 +447,14 @@ fun MinimalistOptimizerApp(
                 modifier = Modifier
                     .fillMaxSize()
                     .systemBarsPadding()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 12.dp)
             ) {
-                // ================= TOP BAR MINIMALIST CAO CẤP =================
+                // ================= TOP BAR (PRO STUDIO CLEAN) =================
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 18.dp),
+                        .padding(top = 4.dp, bottom = 22.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(
@@ -422,41 +462,31 @@ fun MinimalistOptimizerApp(
                             .weight(1f)
                             .padding(end = 12.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(appColors.accent)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = strings.appTitle,
-                                color = appColors.textPrimary,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.2.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                        Text(
+                            text = strings.appTitle,
+                            color = appColors.textPrimary,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.4).sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = strings.appSubtitle,
                             color = appColors.textMuted,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    // Nút Bánh răng (Settings) cố định kích thước, luôn hiển thị đầy đủ trên mọi thiết bị
+                    // Nút Settings tối giản theo tonal surface
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(10.dp))
+                            .size(40.dp)
+                            .clip(CircleShape)
                             .background(appColors.surface)
-                            .border(1.dp, appColors.border, RoundedCornerShape(10.dp))
                             .clickable { showSettingsDialog = true },
                         contentAlignment = Alignment.Center
                     ) {
@@ -464,13 +494,13 @@ fun MinimalistOptimizerApp(
                             imageVector = Icons.Default.Settings,
                             contentDescription = strings.settingsTitle,
                             tint = appColors.textPrimary,
-                            modifier = Modifier.size(19.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                         if (availableUpdate?.hasUpdate == true) {
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(5.dp)
+                                    .padding(7.dp)
                                     .size(7.dp)
                                     .clip(CircleShape)
                                     .background(appColors.warning)
@@ -677,319 +707,187 @@ fun MinimalistOptimizerApp(
                     Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                // ================= 2 THẺ HÀNH ĐỘNG CHÍNH (MINIMALIST BENTO) =================
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // NÚT TRÁI: "Tối ưu video"
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(168.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(appColors.surface)
-                            .border(
-                                width = 1.dp,
-                                color = appColors.border,
-                                shape = RoundedCornerShape(20.dp)
-                            )
-                            .clickable {
-                                if (availableUpdate?.hasUpdate == true && !emergencyUnlock) {
-                                    showUpdateDialog = true
-                                } else if (isActionBlocked) {
-                                    val blockedText = remoteNotice?.let { n ->
-                                        val t = n.getTitleForLang(currentLanguage)
-                                        val m = n.getMessageForLang(currentLanguage)
-                                        if (m.isNotBlank()) "${strings.featureBlockedPrefix}: $t\n$m"
-                                        else "${strings.featureBlockedPrefix}: $t"
-                                    } ?: strings.featureBlockedPrefix
-                                    Toast.makeText(
-                                        context,
-                                        blockedText,
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } else {
-                                    videoPicker.launch("video/*")
-                                }
-                            }
-                            .padding(14.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            // Badge phía trên
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(20.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .height(20.dp)
-                                        .clip(CircleShape)
-                                        .background(appColors.accentSoft)
-                                        .border(
-                                            0.7.dp,
-                                            appColors.accent.copy(alpha = 0.5f),
-                                            CircleShape
-                                        )
-                                        .padding(horizontal = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    @Suppress("DEPRECATION")
-                                    Text(
-                                        text = "HD",
-                                        color = appColors.accentText,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.5.sp,
-                                        style = LocalTextStyle.current.copy(
-                                            platformStyle = PlatformTextStyle(
-                                                includeFontPadding = false
-                                            ),
-                                            lineHeightStyle = LineHeightStyle(
-                                                alignment = LineHeightStyle.Alignment.Center,
-                                                trim = LineHeightStyle.Trim.Both
-                                            )
-                                        )
-                                    )
-                                }
-                            }
+                // ================= HERO ACTION: TỐI ƯU VIDEO (PRIMARY CTA) =================
+                val heroInteraction = remember { MutableInteractionSource() }
+                val heroPressed by heroInteraction.collectIsPressedAsState()
+                val heroScale by animateFloatAsState(
+                    targetValue = if (heroPressed) 0.98f else 1f,
+                    animationSpec = spring(dampingRatio = 0.7f, stiffness = 500f),
+                    label = "heroScale"
+                )
 
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Icon container
-                            Box(
-                                modifier = Modifier
-                                    .size(50.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderFocus, RoundedCornerShape(14.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Movie,
-                                    contentDescription = strings.optCardTitle,
-                                    tint = appColors.accent,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Tiêu đề & phụ đề
-                            Text(
-                                text = strings.optCardTitle,
-                                color = appColors.textPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.3.sp,
-                                maxLines = 1,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = strings.optCardSub,
-                                color = appColors.accentText,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                textAlign = TextAlign.Center
-                            )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            scaleX = heroScale
+                            scaleY = heroScale
                         }
-                    }
-
-                    // NÚT PHẢI: "Đăng video" / "TikTok Studio"
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(168.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(appColors.surface)
-                            .border(
-                                width = 1.dp,
-                                color = appColors.border,
-                                shape = RoundedCornerShape(20.dp)
-                            )
-                            .clickable {
-                                openTikTokStudioInBrowser(context, strings)
-                            }
-                            .padding(14.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(appColors.surface)
+                        .clickable(
+                            interactionSource = heroInteraction,
+                            indication = ripple()
                         ) {
-                            // Badge phía trên
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(20.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .height(20.dp)
-                                        .clip(CircleShape)
-                                        .background(appColors.successSoft)
-                                        .border(
-                                            0.7.dp,
-                                            appColors.success.copy(alpha = 0.5f),
-                                            CircleShape
-                                        )
-                                        .padding(horizontal = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    @Suppress("DEPRECATION")
-                                    Text(
-                                        text = "STUDIO",
-                                        color = appColors.success,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.5.sp,
-                                        style = LocalTextStyle.current.copy(
-                                            platformStyle = PlatformTextStyle(
-                                                includeFontPadding = false
-                                            ),
-                                            lineHeightStyle = LineHeightStyle(
-                                                alignment = LineHeightStyle.Alignment.Center,
-                                                trim = LineHeightStyle.Trim.Both
-                                            )
-                                        )
-                                    )
-                                }
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (availableUpdate?.hasUpdate == true && !emergencyUnlock) {
+                                showUpdateDialog = true
+                            } else if (isActionBlocked) {
+                                val blockedText = remoteNotice?.let { n ->
+                                    val t = n.getTitleForLang(currentLanguage)
+                                    val m = n.getMessageForLang(currentLanguage)
+                                    if (m.isNotBlank()) "${strings.featureBlockedPrefix}: $t\n$m"
+                                    else "${strings.featureBlockedPrefix}: $t"
+                                } ?: strings.featureBlockedPrefix
+                                Toast.makeText(context, blockedText, Toast.LENGTH_LONG).show()
+                            } else {
+                                videoPicker.launch("video/*")
                             }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Icon container
+                        }
+                        .padding(20.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = strings.optCardTitle,
+                                    color = appColors.textPrimary,
+                                    fontSize = 19.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.3).sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = strings.optCardSub,
+                                    color = appColors.textSecondary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
                             Box(
                                 modifier = Modifier
-                                    .size(50.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderFocus, RoundedCornerShape(14.dp)),
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(appColors.primaryCtaBg),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Upload,
-                                    contentDescription = strings.uploadCardTitle,
-                                    tint = appColors.success,
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = strings.optCardTitle,
+                                    tint = appColors.primaryCtaContent,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Tiêu đề & phụ đề
-                            Text(
-                                text = strings.uploadCardTitle,
-                                color = appColors.textPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.3.sp,
-                                maxLines = 1,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = strings.uploadCardSub,
-                                color = appColors.success,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                textAlign = TextAlign.Center
-                            )
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // ================= NÚT SOI LINK TIKTOK (BẢN TEST) =================
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(72.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(appColors.surface)
-                        .border(1.dp, appColors.border, RoundedCornerShape(20.dp))
-                        .clickable { showTikTokAuditDialog = true }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                // ================= 2 CÔNG CỤ PHỤ (COMPACT UTILITY ROW) =================
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Đăng TikTok Studio
                     Row(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(appColors.surface)
+                            .clickable {
+                                openTikTokStudioInBrowser(context, strings)
+                            }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(44.dp)
+                                .size(38.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(appColors.accentSoft)
-                                .border(
-                                    1.dp,
-                                    appColors.accent.copy(alpha = 0.5f),
-                                    RoundedCornerShape(12.dp)
-                                ),
+                                .background(appColors.surfaceElevated),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = null,
-                                tint = appColors.accent,
-                                modifier = Modifier.size(22.dp)
+                                imageVector = Icons.Default.Upload,
+                                contentDescription = strings.uploadCardTitle,
+                                tint = appColors.success,
+                                modifier = Modifier.size(19.dp)
                             )
                         }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = if (currentLanguage == AppLanguage.EN) "Inspect TikTok Link" else "Soi Link TikTok",
-                                    color = appColors.textPrimary,
-                                    fontSize = 14.5.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(CircleShape)
-                                        .background(appColors.accent.copy(alpha = 0.2f))
-                                        .border(0.7.dp, appColors.accent, CircleShape)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "TEST",
-                                        color = appColors.accentText,
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (currentLanguage == AppLanguage.EN) "Check FPS, Resolution, Bitrate & Shadowban Risk" else "Check FPS, Resolution, Bitrate & Rủi ro Shadowban",
+                                text = strings.uploadCardTitle,
+                                color = appColors.textPrimary,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = strings.uploadCardSub,
                                 color = appColors.textMuted,
                                 fontSize = 11.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                    }
 
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            tint = appColors.textMuted,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    // Soi Link TikTok
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(appColors.surface)
+                            .clickable { showTikTokAuditDialog = true }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(appColors.surfaceElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                tint = appColors.accent,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (currentLanguage == AppLanguage.EN) "Inspect link" else "Soi link",
+                                color = appColors.textPrimary,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (currentLanguage == AppLanguage.EN) "Bitrate · FPS" else "Bitrate · FPS",
+                                color = appColors.textMuted,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(26.dp))
 
-                // ================= DỰ ÁN GẦN ĐÂY =================
+                // ================= DỰ ÁN GẦN ĐÂY (9:16 PORTRAIT CARDS) =================
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -999,144 +897,129 @@ fun MinimalistOptimizerApp(
                 ) {
                     Text(
                         text = strings.recentProjects,
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = appColors.textPrimary
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = appColors.textPrimary,
+                        letterSpacing = (-0.2).sp
                     )
                     if (historyList.isNotEmpty()) {
                         Text(
-                            text = String.format(strings.videosOptimized, historyList.size),
-                            fontSize = 11.sp,
+                            text = "${historyList.size}",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
                             color = appColors.textMuted
                         )
                     }
                 }
 
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(horizontal = 1.dp)
-                ) {
-                    items(historyList) { item ->
-                        AmoledHistoryVideoCard(
-                            record = item,
-                            onClick = { selectedHistoryRecord = item }
+                if (historyList.isEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(appColors.surface)
+                            .padding(horizontal = 16.dp, vertical = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Movie,
+                            contentDescription = null,
+                            tint = appColors.textMuted.copy(alpha = 0.55f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = strings.noVideosYet,
+                            color = appColors.textMuted,
+                            fontSize = 13.sp
                         )
                     }
-
-                    val placeholderCount = max(0, 4 - historyList.size)
-                    items(placeholderCount) {
-                        Box(
-                            modifier = Modifier
-                                .size(88.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(appColors.surface)
-                                .border(
-                                    width = 1.dp,
-                                    color = appColors.borderSubtle,
-                                    shape = RoundedCornerShape(16.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Movie,
-                                contentDescription = null,
-                                tint = appColors.textMuted.copy(alpha = 0.3f),
-                                modifier = Modifier.size(22.dp)
+                } else {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(historyList) { item ->
+                            AmoledHistoryVideoCard(
+                                record = item,
+                                onClick = { selectedHistoryRecord = item }
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // ================= CARD MẸO SỬ DỤNG HỮU ÍCH (ROTATING TIPS - 5S) =================
-                val tips = strings.tips
-                var currentTipIndex by remember { mutableIntStateOf(0) }
-                LaunchedEffect(tips) {
-                    while (true) {
-                        kotlinx.coroutines.delay(5000L)
-                        if (tips.isNotEmpty()) {
-                            currentTipIndex = (currentTipIndex + 1) % tips.size
-                        }
-                    }
-                }
-
-                Box(
+                // ================= NÚT NÉN VIDEO (DƯỚI THANH RECENT PROJECTS) =================
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(18.dp))
                         .background(appColors.surface)
-                        .border(1.dp, appColors.border, RoundedCornerShape(18.dp))
                         .clickable {
-                            if (tips.isNotEmpty()) {
-                                currentTipIndex = (currentTipIndex + 1) % tips.size
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (availableUpdate?.hasUpdate == true && !emergencyUnlock) {
+                                showUpdateDialog = true
+                            } else if (isActionBlocked) {
+                                val blockedText = remoteNotice?.let { n ->
+                                    val t = n.getTitleForLang(currentLanguage)
+                                    val m = n.getMessageForLang(currentLanguage)
+                                    if (m.isNotBlank()) "${strings.featureBlockedPrefix}: $t\n$m"
+                                    else "${strings.featureBlockedPrefix}: $t"
+                                } ?: strings.featureBlockedPrefix
+                                Toast.makeText(context, blockedText, Toast.LENGTH_LONG).show()
+                            } else {
+                                compressDialogInitialMeta = null
+                                compressDialogChained = false
+                                showCompressDialog = true
                             }
                         }
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(appColors.surfaceElevated),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(appColors.accentSoft),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lightbulb,
-                                contentDescription = null,
-                                tint = appColors.accent,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            AnimatedContent(
-                                targetState = currentTipIndex,
-                                transitionSpec = {
-                                    (slideInVertically { height -> height / 2 } + fadeIn(tween(350))) togetherWith
-                                        (slideOutVertically { height -> -height / 2 } + fadeOut(tween(250)))
-                                },
-                                label = "tip_transition"
-                            ) { index ->
-                                val tip = tips.getOrElse(index) { Pair("", "") }
-                                Column {
-                                    Text(
-                                        text = tip.first,
-                                        color = appColors.textPrimary,
-                                        fontSize = 12.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = tip.second,
-                                        color = appColors.textMuted,
-                                        fontSize = 10.5.sp,
-                                        lineHeight = 15.sp,
-                                        maxLines = 2
-                                    )
-                                }
-                            }
-                        }
-                        if (tips.isNotEmpty()) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${(currentTipIndex % tips.size) + 1}/${tips.size}",
-                                color = appColors.textMuted.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Compress,
+                            contentDescription = strings.compressCardTitle,
+                            tint = appColors.accent,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.compressCardTitle,
+                            color = appColors.textPrimary,
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = strings.compressCardSub,
+                            color = appColors.textMuted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = appColors.textMuted,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -1216,12 +1099,64 @@ fun MinimalistOptimizerApp(
         )
     }
 
+    // ================= MODAL CẢNH BÁO VIDEO > 100 MB =================
+    pendingLargeVideoMeta?.let { largeMeta ->
+        LargeVideoCompressPromptDialog(
+            videoMeta = largeMeta,
+            strings = strings,
+            onContinueWithoutCompress = {
+                pendingLargeVideoMeta = null
+                startOptimizeFlow(largeMeta)
+            },
+            onSwitchToCompress = {
+                pendingLargeVideoMeta = null
+                compressDialogInitialMeta = largeMeta
+                compressDialogChained = true
+                showCompressDialog = true
+            },
+            onDismiss = {
+                pendingLargeVideoMeta = null
+            }
+        )
+    }
+
+    // ================= MODAL NÉN VIDEO (3 CẤP ĐỘ) =================
+    if (showCompressDialog) {
+        VideoCompressDialog(
+            initialVideoMeta = compressDialogInitialMeta,
+            autoOptimizeAfterCompress = compressDialogChained,
+            strings = strings,
+            onDismiss = {
+                showCompressDialog = false
+                compressDialogInitialMeta = null
+                compressDialogChained = false
+            },
+            onCompressedForOptimize = { origMeta, tempCompressedFile ->
+                showCompressDialog = false
+                compressDialogInitialMeta = null
+                compressDialogChained = false
+                startOptimizeFlow(origMeta, overrideInputFile = tempCompressedFile)
+            },
+            onOptimizeSavedUri = { savedUri ->
+                showCompressDialog = false
+                compressDialogInitialMeta = null
+                compressDialogChained = false
+                scope.launch {
+                    val savedMeta = extractVideoMetadata(context, savedUri)
+                    startOptimizeFlow(savedMeta)
+                }
+            }
+        )
+    }
+
     // ================= MODAL LIVE LOG KHI ĐANG NÉN =================
     if (showLiveLogDialog) {
         LiveLogDialog(
             isCompressing = isCompressing,
             statusText = currentCompressStatus,
             logs = currentCompressLogs,
+            detailedLogs = currentDetailedLogs,
+            rawErrorSummary = currentRawErrorSummary,
             savedRecord = currentSavedRecord,
             videoMeta = currentProcessingVideoMeta,
             strings = strings,
@@ -1281,7 +1216,7 @@ fun MinimalistOptimizerApp(
     }
 }
 
-// ================= THẺ VIDEO LỊCH SỬ DARK AMOLED =================
+// ================= THẺ VIDEO LỊCH SỬ (9:16 PORTRAIT) =================
 @Composable
 fun AmoledHistoryVideoCard(
     record: CompressedVideoRecord,
@@ -1295,14 +1230,10 @@ fun AmoledHistoryVideoCard(
 
     Box(
         modifier = Modifier
-            .size(88.dp)
+            .width(92.dp)
+            .height(132.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(appColors.surface)
-            .border(
-                1.dp,
-                appColors.border,
-                RoundedCornerShape(16.dp)
-            )
             .clickable(onClick = onClick)
     ) {
         if (thumbnailBitmap != null) {
@@ -1317,8 +1248,8 @@ fun AmoledHistoryVideoCard(
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f)),
-                            startY = 40f
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
+                            startY = 120f
                         )
                     )
             )
@@ -1333,32 +1264,32 @@ fun AmoledHistoryVideoCard(
             )
         }
 
-        Row(
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 8.dp, vertical = 8.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(5.dp)
-                    .clip(CircleShape)
-                    .background(appColors.accent)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = record.displayName,
                 color = Color.White,
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${record.optimizedSizeMb} MB",
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 9.5.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1
             )
         }
     }
 }
 
-// ================= MODAL CÀI ĐẶT & THÔNG TIN (BÁNH RĂNG) =================
+// ================= BOTTOM SHEET CÀI ĐẶT & GIỚI THIỆU =================
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppSettingsDialog(
     currentAppVersion: String,
@@ -1380,62 +1311,41 @@ fun AppSettingsDialog(
     val strings = AppStrings.forLanguage(currentLanguage)
     var versionTapCount by remember { mutableIntStateOf(0) }
     val githubRepoUrl = "https://github.com/j7x69/Recompress-Bypass"
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    Dialog(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = appColors.dialogSurface,
+        scrimColor = Color.Black.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = appColors.textMuted.copy(alpha = 0.35f))
+        }
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
-                .border(1.dp, appColors.border, RoundedCornerShape(22.dp))
-                .padding(20.dp)
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 20.dp)
         ) {
             Column {
                 // Header
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(appColors.surfaceElevated),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = appColors.accent,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = strings.settingsTitle,
-                            color = appColors.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                Text(
+                    text = strings.settingsTitle,
+                    color = appColors.textPrimary,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.3).sp
+                )
 
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = strings.close,
-                            tint = appColors.textMuted
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 440.dp),
+                        .heightIn(max = 520.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // CARD 1: GitHub Của Tác Giả
@@ -1853,7 +1763,7 @@ fun AppearanceSelectionDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(20.dp))
-                .background(appColors.surface)
+                .background(appColors.dialogSurface)
                 .border(1.dp, appColors.border, RoundedCornerShape(20.dp))
                 .padding(20.dp)
         ) {
@@ -2003,7 +1913,7 @@ fun AdvancedThemeCustomizerDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
+                .background(appColors.dialogSurface)
                 .border(1.dp, appColors.border, RoundedCornerShape(22.dp))
                 .padding(18.dp)
         ) {
@@ -2295,6 +2205,8 @@ fun LiveLogDialog(
     isCompressing: Boolean,
     statusText: String,
     logs: List<String>,
+    detailedLogs: List<String> = emptyList(),
+    rawErrorSummary: String? = null,
     savedRecord: CompressedVideoRecord?,
     videoMeta: VideoMetadata?,
     strings: AppStringsData,
@@ -2302,6 +2214,7 @@ fun LiveLogDialog(
     onOpenTikTokStudio: () -> Unit
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val appColors = LocalAppColors.current
@@ -2326,7 +2239,7 @@ fun LiveLogDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
+                .background(appColors.dialogSurface)
                 .border(
                     1.dp,
                     if (isFailed) appColors.danger.copy(alpha = 0.5f) else appColors.border,
@@ -2484,7 +2397,10 @@ fun LiveLogDialog(
                                     if (!isSendingDiscord && !discordSentSuccess) {
                                         isSendingDiscord = true
                                         scope.launch {
-                                            val lastErr = logs.findLast { it.startsWith("[ERROR]") } ?: "Unknown Error"
+                                            val lastErr = rawErrorSummary
+                                                ?: logs.findLast { it.startsWith("[ERROR]") }
+                                                ?: "Unknown Error"
+                                            val logsToSend = detailedLogs.ifEmpty { logs }
                                             val sent = DiscordWebhookManager.sendErrorLog(
                                                 context = context,
                                                 videoName = videoMeta?.name ?: "Video_Unknown",
@@ -2492,7 +2408,7 @@ fun LiveLogDialog(
                                                 resolution = videoMeta?.resolution ?: "N/A",
                                                 durationSec = videoMeta?.durationSec ?: "N/A",
                                                 errorSummary = lastErr,
-                                                logs = logs
+                                                logs = logsToSend
                                             )
                                             isSendingDiscord = false
                                             discordSentSuccess = sent
@@ -2557,7 +2473,8 @@ fun LiveLogDialog(
     }
 }
 
-// ================= MODAL CHI TIẾT VIDEO ĐÃ TỐI ƯU =================
+// ================= BOTTOM SHEET CHI TIẾT VIDEO ĐÃ TỐI ƯU =================
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryDetailDialog(
     record: CompressedVideoRecord,
@@ -2571,45 +2488,45 @@ fun HistoryDetailDialog(
     var showFullLogs by remember { mutableStateOf(false) }
     var isSendingDiscord by remember { mutableStateOf(false) }
     var discordSentSuccess by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val thumbnailBitmap = remember(record.id) {
         HistoryRepository.loadThumbnail(context, record.thumbnailFileName)
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = appColors.dialogSurface,
+        scrimColor = Color.Black.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = appColors.textMuted.copy(alpha = 0.35f))
+        }
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
-                .border(1.dp, appColors.border, RoundedCornerShape(22.dp))
-                .padding(18.dp)
+                .navigationBarsPadding()
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 24.dp)
         ) {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = strings.historyProjectPrefix.format(record.displayName),
-                        color = appColors.textPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = strings.close, tint = appColors.textMuted)
-                    }
-                }
+                Text(
+                    text = strings.historyProjectPrefix.format(record.displayName),
+                    color = appColors.textPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.3).sp
+                )
 
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(appColors.surfaceElevated)
-                        .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(appColors.dialogSurfaceElevated)
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2748,14 +2665,20 @@ fun HistoryDetailDialog(
                                 if (!isSendingDiscord && !discordSentSuccess) {
                                     isSendingDiscord = true
                                     scope.launch {
+                                        val logsToSend = record.detailedLogs.ifEmpty { record.logs }
                                         val sent = DiscordWebhookManager.sendErrorLog(
                                             context = context,
                                             videoName = record.originalName,
                                             videoSizeMb = record.originalSizeMb,
                                             resolution = record.resolution,
                                             durationSec = record.durationSec,
-                                            errorSummary = record.logs.findLast { it.startsWith("[ERROR]") } ?: "Project history report",
-                                            logs = record.logs
+                                            errorSummary = logsToSend.findLast {
+                                                it.startsWith("[ERROR_RAW]") || it.startsWith(
+                                                    "[ERROR]"
+                                                )
+                                            }
+                                                ?: "Project history report",
+                                            logs = logsToSend
                                         )
                                         isSendingDiscord = false
                                         discordSentSuccess = sent
@@ -2799,23 +2722,33 @@ fun HistoryDetailDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp),
+                        .height(48.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    OutlinedButton(
+                    TextButton(
                         onClick = {
                             playSpecificVideo(context, record)
                         },
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = appColors.textPrimary),
-                        border = BorderStroke(1.dp, appColors.border)
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = appColors.dialogSurfaceElevated,
+                            contentColor = appColors.textPrimary
+                        )
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(strings.historyPlayVideo, fontSize = 12.5.sp)
+                        Text(
+                            strings.historyPlayVideo,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     Button(
@@ -2823,14 +2756,24 @@ fun HistoryDetailDialog(
                         modifier = Modifier
                             .weight(1.3f)
                             .fillMaxHeight(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = appColors.surfaceElevated),
-                        border = BorderStroke(1.dp, appColors.borderFocus)
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = appColors.primaryCtaBg,
+                            contentColor = appColors.primaryCtaContent
+                        )
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Upload, contentDescription = null, tint = appColors.accent, modifier = Modifier.size(15.dp))
+                            Icon(
+                                Icons.Default.Upload,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.logPostTikTok, color = appColors.textPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                strings.logPostTikTok,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -3052,27 +2995,33 @@ suspend fun extractVideoMetadata(context: Context, uri: Uri): VideoMetadata = wi
     )
 }
 
-// Xử lý tối ưu video và lưu lịch sử (log ngắn gọn, không lộ chi tiết kỹ thuật)
+// Xử lý tối ưu video và lưu lịch sử (UI hiển thị log ngắn gọn đã che, nhưng lưu đầy đủ detailedLogs cho Discord)
 suspend fun processAndOptimizeVideo(
     context: Context,
     media: VideoMetadata,
     historyIndex: Int,
     language: AppLanguage = LanguagePreferences.getLanguage(context),
+    overrideInputFile: File? = null,
     onLog: (String) -> Unit
-): CompressedVideoRecord? = withContext(Dispatchers.IO) {
+): OptimizeProcessResult = withContext(Dispatchers.IO) {
     val startTime = System.currentTimeMillis()
     val isEn = (language == AppLanguage.EN)
-    val tempIn = File(context.cacheDir, "temp_input.mp4")
+    val tempIn = overrideInputFile ?: File(context.cacheDir, "temp_input.mp4")
     val tempOut = File(context.cacheDir, "temp_optimized.mp4")
-    if (tempIn.exists()) tempIn.delete()
+    if (overrideInputFile == null && tempIn.exists()) tempIn.delete()
     if (tempOut.exists()) tempOut.delete()
 
     val initialLog = if (isEn) "[START] Reading video..." else "[START] Đang đọc video..."
     val logsCollector = mutableListOf(initialLog)
+    val detailedLogsCollector = mutableListOf(
+        initialLog,
+        "[META] name=${media.name}, origSize=${media.sizeMb}MB (${media.sizeBytes}B), res=${media.resolution}, dur=${media.durationSec}s, preCompressed=${overrideInputFile != null}, rustNative=${RustCoreBridge.isNativeAvailable}"
+    )
 
     val mainHandler = Handler(Looper.getMainLooper())
-    fun appendLog(msg: String) {
+    fun appendUiLog(msg: String) {
         logsCollector.add(msg)
+        detailedLogsCollector.add(msg)
         mainHandler.post {
             onLog(msg)
         }
@@ -3083,29 +3032,38 @@ suspend fun processAndOptimizeVideo(
 
     try {
         val streamBufSize = 1024 * 1024
-        val inStream = resolver.openInputStream(media.uri)
-            ?: throw IllegalStateException(if (isEn) "Cannot read selected video." else "Không thể đọc video đã chọn.")
-        inStream.use { input ->
-            FileOutputStream(tempIn, false).use { output ->
-                input.copyTo(output, bufferSize = streamBufSize)
+        if (overrideInputFile == null) {
+            val inStream = resolver.openInputStream(media.uri)
+                ?: throw IllegalStateException(if (isEn) "Cannot read selected video." else "Không thể đọc video đã chọn.")
+            inStream.use { input ->
+                FileOutputStream(tempIn, false).use { output ->
+                    input.copyTo(output, bufferSize = streamBufSize)
+                }
             }
+            detailedLogsCollector.add("[IO] Copied source to tempIn (${tempIn.length()} bytes)")
+        } else {
+            detailedLogsCollector.add("[IO] Using pre-compressed temp file (${tempIn.length()} bytes)")
         }
 
-        appendLog(if (isEn) "[PROCESS] Optimizing video..." else "[PROCESS] Đang tối ưu video...")
+        appendUiLog(if (isEn) "[PROCESS] Optimizing video..." else "[PROCESS] Đang tối ưu video...")
 
         Mp4BypassOptimizer.optimize(
             inputFile = tempIn,
             outputFile = tempOut,
-            onLog = { /* Không ghi chi tiết kỹ thuật vào log hiển thị */ }
+            onLog = { rustLine ->
+                // Giữ ẩn trên UI nhưng ghi đầy đủ vào detailedLogs để gửi Discord
+                detailedLogsCollector.add("[RUST] $rustLine")
+            }
         )
 
-        // Xóa ngay bản sao đầu vào để giảm dung lượng đỉnh từ 3x xuống 2x khi ghi ra MediaStore
+        // Xóa ngay bản sao đầu vào (hoặc file nén trung gian) để tiết kiệm dung lượng và chỉ giữ file optimize
         if (tempIn.exists()) tempIn.delete()
 
         val optimizedBytes = tempOut.length()
         if (optimizedBytes <= 0L) {
             throw IllegalStateException(if (isEn) "Optimized output is empty." else "Tệp đầu ra bị rỗng.")
         }
+        detailedLogsCollector.add("[IO] Rust optimize finished: outBytes=$optimizedBytes")
 
         val cleanBaseName = media.name
             .removeSuffix(".mp4")
@@ -3155,10 +3113,11 @@ suspend fun processAndOptimizeVideo(
         pendingItemUri = null
 
         val elapsedMs = System.currentTimeMillis() - startTime
-        appendLog(
+        appendUiLog(
             if (isEn) "[SUCCESS] Saved to gallery (${elapsedMs}ms)"
             else "[SUCCESS] Đã lưu vào thư viện (${elapsedMs}ms)"
         )
+        detailedLogsCollector.add("[GALLERY] Saved output -> Movies/RecompressBypass/$outFileName (uri=$itemUri)")
 
         val id = System.currentTimeMillis().toString()
         val displayName = HistoryRepository.generateDisplayName(historyIndex)
@@ -3184,28 +3143,42 @@ suspend fun processAndOptimizeVideo(
             outputPath = "Movies/RecompressBypass/$outFileName",
             thumbnailFileName = thumbFileName,
             logs = logsCollector,
-            contentUri = itemUri.toString()
+            contentUri = itemUri.toString(),
+            detailedLogs = detailedLogsCollector
         )
 
         HistoryRepository.saveRecord(context, record)
-        record
-    } catch (_: Throwable) {
+        OptimizeProcessResult(
+            record = record,
+            detailedLogs = detailedLogsCollector,
+            rawErrorSummary = null
+        )
+    } catch (e: Throwable) {
         pendingItemUri?.let { orphanUri ->
             try {
                 resolver.delete(orphanUri, null, null)
             } catch (_: Exception) {
             }
         }
+        val rawErr = "${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}"
+        detailedLogsCollector.add("[ERROR_RAW] $rawErr")
+        e.stackTrace.take(8).forEach { frame ->
+            detailedLogsCollector.add("  at $frame")
+        }
         val cleanErr = if (isEn) {
             "Unable to optimize this video file."
         } else {
             "Không thể tối ưu file video này."
         }
-        appendLog("[ERROR] $cleanErr")
-        null
+        appendUiLog("[ERROR] $cleanErr")
+        OptimizeProcessResult(
+            record = null,
+            detailedLogs = detailedLogsCollector,
+            rawErrorSummary = rawErr
+        )
     } finally {
-        tempIn.delete()
-        tempOut.delete()
+        if (tempIn.exists()) tempIn.delete()
+        if (tempOut.exists()) tempOut.delete()
     }
 }
 
@@ -3218,6 +3191,7 @@ fun AppUpdateDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val appColors = LocalAppColors.current
     val currentLanguage = LocalAppLanguage.current
@@ -3238,7 +3212,7 @@ fun AppUpdateDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
+                .background(appColors.dialogSurface)
                 .border(1.dp, appColors.border, RoundedCornerShape(22.dp))
                 .padding(20.dp)
         ) {
@@ -3478,7 +3452,7 @@ fun SponsorPromptDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
-                .background(appColors.surface)
+                .background(appColors.dialogSurface)
                 .border(1.dp, sponsorPink.copy(alpha = 0.45f), RoundedCornerShape(22.dp))
                 .padding(20.dp)
         ) {

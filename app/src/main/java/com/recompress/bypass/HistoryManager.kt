@@ -24,7 +24,8 @@ data class CompressedVideoRecord(
     val outputPath: String,
     val thumbnailFileName: String?,
     val logs: List<String>,
-    val contentUri: String? = null
+    val contentUri: String? = null,
+    val detailedLogs: List<String> = emptyList()
 )
 
 object HistoryRepository {
@@ -50,6 +51,14 @@ object HistoryRepository {
                     }
                 }
 
+                val detailedLogsArr = obj.optJSONArray("detailedLogs")
+                val detailedLogs = mutableListOf<String>()
+                if (detailedLogsArr != null) {
+                    for (j in 0 until detailedLogsArr.length()) {
+                        detailedLogs.add(detailedLogsArr.getString(j))
+                    }
+                }
+
                 list.add(
                     CompressedVideoRecord(
                         id = obj.optString("id", System.currentTimeMillis().toString()),
@@ -63,7 +72,9 @@ object HistoryRepository {
                         outputPath = obj.optString("outputPath", ""),
                         thumbnailFileName = obj.optString("thumbnailFileName", null.toString()).takeIf { it != "null" && it.isNotBlank() },
                         logs = logs,
-                        contentUri = obj.optString("contentUri", "").takeIf { it.isNotBlank() && it != "null" }
+                        contentUri = obj.optString("contentUri", "")
+                            .takeIf { it.isNotBlank() && it != "null" },
+                        detailedLogs = detailedLogs
                     )
                 )
             }
@@ -99,6 +110,9 @@ object HistoryRepository {
                 item.logs.forEach { logsArr.put(it) }
                 put("logs", logsArr)
                 put("contentUri", item.contentUri ?: JSONObject.NULL)
+                val detailedLogsArr = JSONArray()
+                item.detailedLogs.forEach { detailedLogsArr.put(it) }
+                put("detailedLogs", detailedLogsArr)
             }
             array.put(obj)
         }

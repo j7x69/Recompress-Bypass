@@ -31,3 +31,9 @@ videos/
 security-audit.md
 build_release.bat
 AGENTS.md
+
+# Release signing keystore & credentials (NEVER commit!)
+keystore/
+*.jks
+*.keystore
+keystore.properties

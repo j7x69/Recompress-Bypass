@@ -29,28 +29,33 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TikTokAuditDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val appColors = LocalAppColors.current
     val currentLang = LocalAppLanguage.current
     val isEn = currentLang == AppLanguage.EN
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var linkInput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -60,9 +65,11 @@ fun TikTokAuditDialog(
 
     fun runAudit() {
         if (linkInput.isBlank()) {
-            errorMessage = if (isEn) "Please paste a TikTok video link!" else "Vui lòng dán đường link video TikTok!"
+            errorMessage =
+                if (isEn) "Please paste a TikTok video link." else "Vui lòng dán đường link video TikTok."
             return
         }
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         isLoading = true
         errorMessage = null
         currentStepText = if (isEn) "Connecting to TikTok..." else "Đang kết nối tới máy chủ TikTok..."
@@ -75,326 +82,261 @@ fun TikTokAuditDialog(
                 auditResult = res
             }.onFailure { err ->
                 errorMessage = err.localizedMessage ?: if (isEn) {
-                    "Cannot inspect this video. Please check the link or network!"
+                    "Cannot inspect this video. Please check the link or network."
                 } else {
-                    "Không thể kiểm tra video này. Vui lòng kiểm tra lại đường link hoặc kết nối mạng!"
+                    "Không thể kiểm tra video này. Vui lòng kiểm tra lại đường link hoặc kết nối mạng."
                 }
             }
         }
     }
 
-    val dialogBoxModifier = if (auditResult != null) {
-        Modifier
-            .fillMaxWidth(0.96f)
-            .fillMaxHeight(0.92f)
-    } else {
-        Modifier
-            .fillMaxWidth(0.94f)
-            .wrapContentHeight()
-    }
-
-    Dialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        sheetState = sheetState,
+        containerColor = appColors.dialogSurface,
+        scrimColor = Color.Black.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = appColors.textMuted.copy(alpha = 0.35f))
+        }
     ) {
-        Box(
-            modifier = dialogBoxModifier
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (auditResult != null) Modifier.fillMaxHeight(0.88f) else Modifier.wrapContentHeight())
                 .animateContentSize()
-                .clip(RoundedCornerShape(24.dp))
-                .background(appColors.surface)
-                .border(1.dp, appColors.border, RoundedCornerShape(24.dp))
-                .padding(18.dp)
+                .navigationBarsPadding()
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 24.dp)
         ) {
-            Column(
-                modifier = if (auditResult != null) Modifier.fillMaxSize() else Modifier.wrapContentHeight()
-            ) {
-                // Top Header Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+            // Header
+            Text(
+                text = if (isEn) "Inspect TikTok Link" else "Soi Link TikTok",
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.3).sp,
+                color = appColors.textPrimary
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = if (isEn) "Resolution · FPS · Bitrate · FYP Status" else "Độ phân giải · FPS · Bitrate · Trạng thái FYP",
+                fontSize = 12.sp,
+                color = appColors.textMuted
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Input URL + Paste button
+            OutlinedTextField(
+                value = linkInput,
+                onValueChange = {
+                    linkInput = it
+                    errorMessage = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = {
+                    Text(
+                        text = if (isEn) "Paste TikTok link (vt.tiktok.com/...)" else "Dán link video TikTok (vt.tiktok.com/...)",
+                        fontSize = 13.sp,
+                        color = appColors.textMuted
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = appColors.dialogSurfaceElevated,
+                    unfocusedContainerColor = appColors.dialogSurfaceElevated,
+                    focusedBorderColor = appColors.accent.copy(alpha = 0.7f),
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = appColors.textPrimary,
+                    unfocusedTextColor = appColors.textPrimary,
+                    cursorColor = appColors.accent
+                ),
+                trailingIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(appColors.accentSoft)
-                                .border(0.7.dp, appColors.accent.copy(alpha = 0.5f), RoundedCornerShape(10.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
+                        if (linkInput.isNotEmpty()) {
+                            IconButton(onClick = { linkInput = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = if (isEn) "Clear" else "Xóa",
+                                    tint = appColors.textMuted,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = {
+                            val clipboard =
+                                context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = clipboard.primaryClip
+                            if (clip != null && clip.itemCount > 0) {
+                                val text = clip.getItemAt(0).text?.toString() ?: ""
+                                if (text.isNotBlank()) {
+                                    linkInput = text
+                                    errorMessage = null
+                                }
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    if (isEn) "Clipboard is empty" else "Bộ nhớ tạm rỗng",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }) {
                             Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = null,
+                                imageVector = Icons.Default.ContentPaste,
+                                contentDescription = if (isEn) "Paste" else "Dán",
                                 tint = appColors.accent,
                                 modifier = Modifier.size(19.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = if (isEn) "TikTok Link Inspector" else "Soi Link TikTok",
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = appColors.textPrimary
-                            )
-                            Text(
-                                text = "FPS • Resolution • Bitrate • Shadowban [PRO]",
-                                fontSize = 10.5.sp,
-                                color = appColors.accentText
-                            )
-                        }
                     }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { runAudit() })
+            )
 
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.size(32.dp)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Primary CTA Button
+            Button(
+                onClick = { runAudit() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = appColors.primaryCtaBg,
+                    contentColor = appColors.primaryCtaContent,
+                    disabledContainerColor = appColors.dialogSurfaceElevated,
+                    disabledContentColor = appColors.textMuted
+                ),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = appColors.accent,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isEn) "Inspecting..." else "Đang kiểm tra...",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isEn) "Inspect Video" else "Kiểm tra video",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            // Live Server Progress Step Card
+            AnimatedVisibility(visible = isLoading) {
+                Column {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(appColors.dialogSurfaceElevated)
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = if (isEn) "Close" else "Đóng",
-                            tint = appColors.textMuted,
-                            modifier = Modifier.size(18.dp)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = appColors.accent,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = currentStepText,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = appColors.textPrimary,
+                            lineHeight = 17.sp,
+                            maxLines = 2
                         )
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Input URL + Paste button
-                OutlinedTextField(
-                    value = linkInput,
-                    onValueChange = {
-                        linkInput = it
-                        errorMessage = null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = {
-                        Text(
-                            text = if (isEn) "Paste TikTok link (vt.tiktok.com/...)" else "Dán link video TikTok (vt.tiktok.com/...)",
-                            fontSize = 12.sp,
-                            color = appColors.textMuted
-                        )
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = appColors.surfaceElevated,
-                        unfocusedContainerColor = appColors.surfaceElevated,
-                        focusedBorderColor = appColors.accent,
-                        unfocusedBorderColor = appColors.borderSubtle,
-                        focusedTextColor = appColors.textPrimary,
-                        unfocusedTextColor = appColors.textPrimary,
-                        cursorColor = appColors.accent
-                    ),
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (linkInput.isNotEmpty()) {
-                                IconButton(onClick = { linkInput = "" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = if (isEn) "Clear" else "Xóa",
-                                        tint = appColors.textMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                            IconButton(onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = clipboard.primaryClip
-                                if (clip != null && clip.itemCount > 0) {
-                                    val text = clip.getItemAt(0).text?.toString() ?: ""
-                                    if (text.isNotBlank()) {
-                                        linkInput = text
-                                        errorMessage = null
-                                    }
-                                } else {
-                                    Toast.makeText(context, if (isEn) "Clipboard is empty" else "Bộ nhớ tạm rỗng", Toast.LENGTH_SHORT).show()
-                                }
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentPaste,
-                                    contentDescription = if (isEn) "Paste" else "Dán",
-                                    tint = appColors.accent,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { runAudit() })
-                )
-
+            if (errorMessage != null) {
                 Spacer(modifier = Modifier.height(10.dp))
-
-                // Button Run Inspect
-                Button(
-                    onClick = { runAudit() },
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = appColors.accent,
-                        contentColor = Color.Black
-                    ),
-                    enabled = !isLoading
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(appColors.dangerSoft)
+                        .padding(12.dp)
                 ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = Color.Black,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isEn) "Inspecting Video..." else "Đang soi thông số...",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    } else {
+                    Text(
+                        text = errorMessage!!,
+                        color = appColors.danger,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Results Container
+            val res = auditResult
+            if (res != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    // 1. Top Status Row (clean, minimal)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Bolt,
+                            imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            modifier = Modifier.size(17.dp)
+                            tint = appColors.success,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isEn) "Inspect Video Specs" else "Bắt đầu soi thông số",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            text = if (isEn) {
+                                "Analyzed in ${String.format(Locale.US, "%.1f", res.elapsedSec)}s"
+                            } else {
+                                "Phân tích xong trong ${
+                                    String.format(
+                                        Locale.US,
+                                        "%.1f",
+                                        res.elapsedSec
+                                    )
+                                } giây"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = appColors.textSecondary
                         )
                     }
-                }
 
-                // Live Server Progress Step Card
-                AnimatedVisibility(visible = isLoading) {
-                    Column {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(appColors.surfaceElevated)
-                                .border(1.dp, appColors.accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(appColors.accentSoft),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(15.dp),
-                                        color = appColors.accent,
-                                        strokeWidth = 2.dp
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = if (isEn) "LIVE SERVER PROGRESS" else "TIẾN TRÌNH TRUY VẤN MÁY CHỦ",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = appColors.accent,
-                                        letterSpacing = 0.5.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = currentStepText,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = appColors.textPrimary,
-                                        lineHeight = 15.sp,
-                                        maxLines = 2
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                if (errorMessage != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    // 2. Video Profile & Author Card
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(appColors.dangerSoft)
-                            .border(1.dp, appColors.danger.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                            .padding(10.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(appColors.dialogSurfaceElevated)
+                            .padding(12.dp)
                     ) {
-                        Text(
-                            text = errorMessage!!,
-                            color = appColors.danger,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Results Container
-                val res = auditResult
-                if (res != null) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        // 1. Top Status Banner (Adapted to appColors)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(appColors.surfaceElevated)
-                                .border(1.dp, appColors.borderSubtle, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .clip(CircleShape)
-                                        .background(appColors.success),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isEn) {
-                                        "Checked in ${String.format(Locale.US, "%.1f", res.elapsedSec)} seconds • Analysis complete."
-                                    } else {
-                                        "Đã kiểm tra trong ${String.format(Locale.US, "%.1f", res.elapsedSec)} giây • Hoàn tất phân tích."
-                                    },
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = appColors.textPrimary
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // 2. Video Profile & Author Card
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(appColors.surfaceElevated)
-                                .border(1.dp, appColors.borderSubtle, RoundedCornerShape(16.dp))
-                                .padding(12.dp)
-                        ) {
                             Row(modifier = Modifier.fillMaxWidth()) {
                                 // Thumbnail (9:16 aspect)
                                 Box(
@@ -511,9 +453,16 @@ fun TikTokAuditDialog(
 
                                     // Music track
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = null,
+                                            tint = appColors.accentText,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = "🎵 ${res.soundTitle}",
-                                            fontSize = 10.5.sp,
+                                            text = res.soundTitle,
+                                            fontSize = 11.sp,
                                             color = appColors.accentText,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -652,10 +601,9 @@ fun TikTokAuditDialog(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderSubtle, RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(appColors.dialogSurfaceElevated)
+                                    .padding(horizontal = 14.dp, vertical = 12.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -670,13 +618,13 @@ fun TikTokAuditDialog(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(6.dp))
                                                 .background(appColors.borderSubtle)
-                                                .border(0.7.dp, appColors.border, RoundedCornerShape(6.dp))
                                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                                         ) {
                                             Text(
                                                 text = res.dynamicRange,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace,
                                                 color = appColors.textPrimary
                                             )
                                         }
@@ -739,25 +687,26 @@ fun TikTokAuditDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
+                                    .background(appColors.dialogSurfaceElevated)
                                     .padding(14.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    // Radio waves ((o)) icon
                                     Box(
                                         modifier = Modifier
                                             .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(statusColor.copy(alpha = 0.15f))
-                                            .border(1.dp, statusColor.copy(alpha = 0.5f), CircleShape),
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(statusColor.copy(alpha = 0.14f)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = "((o))",
-                                            color = statusColor,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
+                                        Icon(
+                                            imageVector = when (res.shadowbanStatus) {
+                                                ShadowbanStatus.NOT_SHADOW_BAN -> Icons.Default.CheckCircle
+                                                ShadowbanStatus.SHADOW_BAN_WARNING -> Icons.Default.Warning
+                                                ShadowbanStatus.SHADOW_BANNED -> Icons.Default.Error
+                                            },
+                                            contentDescription = null,
+                                            tint = statusColor,
+                                            modifier = Modifier.size(19.dp)
                                         )
                                     }
 
@@ -823,45 +772,50 @@ fun TikTokAuditDialog(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // 5 Metric Items spaced evenly
+                            // 5 Metric Items spaced evenly (clean vector icons, no emoji)
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
-                                    .padding(horizontal = 8.dp, vertical = 12.dp)
+                                    .background(appColors.dialogSurfaceElevated)
+                                    .padding(horizontal = 8.dp, vertical = 14.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
-                                    InteractionMetricItem("👁️", if (isEn) "Views" else "Lượt xem", formatHazeNumber(res.playCount, isEn), appColors)
-                                    InteractionMetricItem("❤️", if (isEn) "Likes" else "Lượt thích", formatHazeNumber(res.diggCount, isEn), appColors)
-                                    InteractionMetricItem("💬", if (isEn) "Comments" else "Bình luận", formatHazeNumber(res.commentCount, isEn), appColors)
-                                    InteractionMetricItem("🔖", if (isEn) "Saves" else "Yêu thích", formatHazeNumber(res.collectCount, isEn), appColors)
-                                    InteractionMetricItem("🔁", if (isEn) "Shares" else "Chia sẻ", formatHazeNumber(res.shareCount, isEn), appColors)
+                                    InteractionMetricItem(
+                                        Icons.Default.Visibility,
+                                        if (isEn) "Views" else "Xem",
+                                        formatHazeNumber(res.playCount, isEn),
+                                        appColors
+                                    )
+                                    InteractionMetricItem(
+                                        Icons.Default.FavoriteBorder,
+                                        if (isEn) "Likes" else "Thích",
+                                        formatHazeNumber(res.diggCount, isEn),
+                                        appColors
+                                    )
+                                    InteractionMetricItem(
+                                        Icons.Default.ChatBubbleOutline,
+                                        if (isEn) "Comments" else "Bình luận",
+                                        formatHazeNumber(res.commentCount, isEn),
+                                        appColors
+                                    )
+                                    InteractionMetricItem(
+                                        Icons.Default.BookmarkBorder,
+                                        if (isEn) "Saves" else "Lưu",
+                                        formatHazeNumber(res.collectCount, isEn),
+                                        appColors
+                                    )
+                                    InteractionMetricItem(
+                                        Icons.Default.Share,
+                                        if (isEn) "Shares" else "Chia sẻ",
+                                        formatHazeNumber(res.shareCount, isEn),
+                                        appColors
+                                    )
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Glowing accent line
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(RoundedCornerShape(1.5.dp))
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            listOf(
-                                                appColors.accent.copy(alpha = 0.2f),
-                                                appColors.accent,
-                                                appColors.accent.copy(alpha = 0.2f)
-                                            )
-                                        )
-                                    )
-                            )
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -869,7 +823,7 @@ fun TikTokAuditDialog(
                         // 6. CHẨN ĐOÁN CHI TIẾT TỪ MÁY CHỦ
                         Column {
                             Text(
-                                text = if (isEn) "DETAILED SERVER DIAGNOSTICS" else "CHẨN ĐOÁN CHI TIẾT TỪ MÁY CHỦ",
+                                text = if (isEn) "SERVER DIAGNOSTICS" else "CHẨN ĐOÁN TỪ MÁY CHỦ",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = appColors.textMuted,
@@ -881,8 +835,7 @@ fun TikTokAuditDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(appColors.surfaceElevated)
-                                    .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
+                                    .background(appColors.dialogSurfaceElevated)
                                     .padding(14.dp)
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -899,9 +852,9 @@ fun TikTokAuditDialog(
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = if (isEn) diag.textEn else diag.textVi,
-                                                fontSize = 11.5.sp,
+                                                fontSize = 12.sp,
                                                 color = appColors.textSecondary,
-                                                lineHeight = 16.sp
+                                                lineHeight = 17.sp
                                             )
                                         }
                                     }
@@ -915,7 +868,6 @@ fun TikTokAuditDialog(
             }
         }
     }
-}
 
 /**
  * Stepped Ladder Resolution Scale (Trình duyệt & Điện thoại)
@@ -947,8 +899,7 @@ private fun ResolutionLadderBlock(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(appColors.surfaceElevated)
-            .border(1.dp, appColors.borderSubtle, RoundedCornerShape(14.dp))
+            .background(appColors.dialogSurfaceElevated)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         // Row 1: Trình duyệt (Browser)
@@ -1079,7 +1030,7 @@ private fun ResolutionLadderRow(
 
 @Composable
 private fun InteractionMetricItem(
-    icon: String,
+    icon: ImageVector,
     label: String,
     count: String,
     appColors: AppColors
@@ -1088,19 +1039,26 @@ private fun InteractionMetricItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.padding(horizontal = 4.dp)
     ) {
-        Text(
-            text = "$icon $label",
-            fontSize = 9.5.sp,
-            color = appColors.textMuted,
-            softWrap = false,
-            maxLines = 1
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = appColors.textMuted,
+            modifier = Modifier.size(15.dp)
         )
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = count,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
             color = appColors.textPrimary,
+            softWrap = false,
+            maxLines = 1
+        )
+        Text(
+            text = label,
+            fontSize = 9.5.sp,
+            color = appColors.textMuted,
             softWrap = false,
             maxLines = 1
         )

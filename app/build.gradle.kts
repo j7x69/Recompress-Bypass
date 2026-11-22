@@ -1,6 +1,14 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
+}
+
+val keystoreProps = Properties()
+val keystorePropsFile = rootProject.file("keystore.properties")
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.inputStream().use { keystoreProps.load(it) }
 }
 
 android {
@@ -13,8 +21,8 @@ android {
         applicationId = "com.recompress.bypass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12100
-        versionName = "1.2.1"
+        versionCode = 12500
+        versionName = "1.2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -28,6 +36,26 @@ android {
         compose = true
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = keystoreProps.getProperty("storeFile")
+                ?: System.getenv("RELEASE_STORE_FILE")
+            val storePass = keystoreProps.getProperty("storePassword")
+                ?: System.getenv("RELEASE_STORE_PASSWORD")
+            val alias = keystoreProps.getProperty("keyAlias")
+                ?: System.getenv("RELEASE_KEY_ALIAS")
+            val keyPass = keystoreProps.getProperty("keyPassword")
+                ?: System.getenv("RELEASE_KEY_PASSWORD")
+
+            if (!storeFilePath.isNullOrBlank() && !storePass.isNullOrBlank() && !alias.isNullOrBlank() && !keyPass.isNullOrBlank()) {
+                storeFile = rootProject.file(storeFilePath)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -36,7 +64,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            val releaseSigning = signingConfigs.getByName("release")
+            signingConfig =
+                if (releaseSigning.storeFile != null && releaseSigning.storeFile!!.exists()) {
+                    releaseSigning
+                } else {
+                    signingConfigs.getByName("debug")
+                }
         }
         debug {
             isMinifyEnabled = false
@@ -79,6 +113,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.media3:media3-transformer:1.5.1")
+    implementation("androidx.media3:media3-effect:1.5.1")
+    implementation("androidx.media3:media3-common:1.5.1")
     implementation(libs.androidx.core.ktx)
     testImplementation(libs.junit)
 }
